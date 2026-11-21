@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 use super::{
-    BoxFuture, ContainerInfo, ContainerState, DockerError, DockerRuntime, validate_container_id,
+    BoxFuture, ContainerInfo, ContainerState, DockerError, DockerRuntime, InstallProgress,
+    InstallSpec, ProgressCallback, validate_container_id,
 };
 
 #[derive(Debug, Default)]
@@ -142,6 +143,92 @@ impl DockerRuntime for MockDocker {
             Ok(())
         })
     }
+
+    fn restart_container(&self, id: &str) -> BoxFuture<'_, Result<(), DockerError>> {
+        let id = id.to_string();
+        Box::pin(async move {
+            let id = validate_container_id(&id)?;
+            let mut guard = self.state.lock().expect("mock lock poisoned");
+            if guard.disconnected {
+                return Err(DockerError::NotConnected(
+                    "simulador desconectado".to_string(),
+                ));
+            }
+
+            let key = Self::find_key(&guard.containers, id)
+                .ok_or_else(|| DockerError::NotFound(id.to_string()))?;
+            if let Some(container) = guard.containers.get_mut(&key) {
+                container.state = ContainerState::Running;
+                container.status_text = "Restarted just now".to_string();
+            }
+            Ok(())
+        })
+    }
+
+    fn remove_container(&self, id: &str) -> BoxFuture<'_, Result<(), DockerError>> {
+        let id = id.to_string();
+        Box::pin(async move {
+            let id = validate_container_id(&id)?;
+            let mut guard = self.state.lock().expect("mock lock poisoned");
+            if guard.disconnected {
+                return Err(DockerError::NotConnected(
+                    "simulador desconectado".to_string(),
+                ));
+            }
+
+            let key = Self::find_key(&guard.containers, id)
+                .ok_or_else(|| DockerError::NotFound(id.to_string()))?;
+            guard.containers.remove(&key);
+            Ok(())
+        })
+    }
+
+    fn install_app(
+        &self,
+        spec: InstallSpec,
+        on_progress: ProgressCallback,
+    ) -> BoxFuture<'_, Result<ContainerInfo, DockerError>> {
+        Box::pin(async move {
+            let container_name = validate_container_id(&spec.container_name)?.to_string();
+            {
+                let guard = self.state.lock().expect("mock lock poisoned");
+                if guard.disconnected {
+                    return Err(DockerError::NotConnected(
+                        "simulador desconectado".to_string(),
+                    ));
+                }
+            }
+
+            let total_bytes: u64 = 100 * 1024 * 1024;
+            for step in [25_u64, 50, 75, 100] {
+                on_progress(InstallProgress {
+                    phase: "downloading".to_string(),
+                    downloaded_bytes: total_bytes * step / 100,
+                    total_bytes,
+                });
+                tokio::task::yield_now().await;
+            }
+
+            on_progress(InstallProgress {
+                phase: "starting".to_string(),
+                downloaded_bytes: total_bytes,
+                total_bytes,
+            });
+
+            let info = ContainerInfo {
+                id: format!("mock-{}", spec.app_id),
+                name: container_name,
+                image: spec.image,
+                state: ContainerState::Running,
+                status_text: "Up just now".to_string(),
+                app_id: Some(spec.app_id),
+            };
+
+            let mut guard = self.state.lock().expect("mock lock poisoned");
+            guard.containers.insert(info.id.clone(), info.clone());
+            Ok(info)
+        })
+    }
 }
 
 #[cfg(test)]
@@ -195,7 +282,6 @@ mod tests {
             ContainerState::Running
         );
 
-        // Iniciar dos veces no falla
         docker.start_container("c1").await.unwrap();
         assert_eq!(
             docker.container_status("c1").await.unwrap(),
@@ -208,12 +294,59 @@ mod tests {
             ContainerState::Stopped
         );
 
-        // Detener dos veces no falla
         docker.stop_container("c1").await.unwrap();
         assert_eq!(
             docker.container_status("c1").await.unwrap(),
             ContainerState::Stopped
         );
+    }
+
+    #[tokio::test]
+    async fn restart_and_remove_work_on_existing_containers() {
+        let docker = MockDocker::with_containers([sample_container(
+            "c1",
+            "jellyfin",
+            ContainerState::Stopped,
+        )]);
+
+        docker.restart_container("c1").await.unwrap();
+        assert_eq!(
+            docker.container_status("c1").await.unwrap(),
+            ContainerState::Running
+        );
+
+        docker.remove_container("c1").await.unwrap();
+        assert_eq!(
+            docker.container_status("c1").await,
+            Err(DockerError::NotFound("c1".to_string()))
+        );
+    }
+
+    #[tokio::test]
+    async fn install_emits_progress_and_registers_running_container() {
+        let docker = MockDocker::new();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&events);
+
+        let info = docker
+            .install_app(
+                InstallSpec {
+                    app_id: "jellyfin".to_string(),
+                    container_name: "roost-jellyfin".to_string(),
+                    image: "jellyfin/jellyfin:10.10.7".to_string(),
+                    web_port: 8096,
+                    host_data_dir: "/tmp/roost/apps/jellyfin".to_string(),
+                },
+                Arc::new(move |p| sink.lock().unwrap().push(p)),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(info.state, ContainerState::Running);
+        assert_eq!(info.app_id.as_deref(), Some("jellyfin"));
+        let recorded = events.lock().unwrap();
+        assert!(recorded.len() >= 4);
+        assert_eq!(recorded.last().unwrap().phase, "starting");
     }
 
     #[tokio::test]

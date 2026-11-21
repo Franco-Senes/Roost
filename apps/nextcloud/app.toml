@@ -1,0 +1,11 @@
+id = "nextcloud"
+name = "Nextcloud"
+tagline = "Tus archivos y documentos en casa"
+description = "Guardá, ordená y compartí archivos, calendarios y notas con toda la familia sin depender de servicios pagos."
+category = "Archivos"
+version = "30.0.10-apache"
+web_port = 8080
+ram_recommended_mb = 1024
+icon = "icon.svg"
+license = "AGPL-3.0-only"
+upstream = "https://nextcloud.com"

@@ -1,0 +1,14 @@
+services:
+  jellyfin:
+    image: jellyfin/jellyfin:10.10.7
+    container_name: roost-jellyfin
+    restart: unless-stopped
+    ports:
+      - "8096:8096"
+    volumes:
+      - "${ROOST_DATA_DIR:-/var/lib/roost}/apps/jellyfin/config:/config"
+      - "${ROOST_DATA_DIR:-/var/lib/roost}/apps/jellyfin/cache:/cache"
+      - "${ROOST_DATA_DIR:-/var/lib/roost}/apps/jellyfin/media:/media"
+    labels:
+      roost.managed: "true"
+      roost.app: "jellyfin"

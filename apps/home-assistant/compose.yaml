@@ -1,0 +1,12 @@
+services:
+  home-assistant:
+    image: ghcr.io/home-assistant/home-assistant:2025.5.3
+    container_name: roost-home-assistant
+    restart: unless-stopped
+    ports:
+      - "8123:8123"
+    volumes:
+      - "${ROOST_DATA_DIR:-/var/lib/roost}/apps/home-assistant/config:/config"
+    labels:
+      roost.managed: "true"
+      roost.app: "home-assistant"

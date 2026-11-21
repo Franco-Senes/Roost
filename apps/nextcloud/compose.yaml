@@ -1,0 +1,12 @@
+services:
+  nextcloud:
+    image: nextcloud:30.0.10-apache
+    container_name: roost-nextcloud
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    volumes:
+      - "${ROOST_DATA_DIR:-/var/lib/roost}/apps/nextcloud/html:/var/www/html"
+    labels:
+      roost.managed: "true"
+      roost.app: "nextcloud"

@@ -1,4 +1,8 @@
+pub mod apps;
+pub mod auth;
+pub mod db;
 pub mod docker;
+pub mod metrics;
 pub mod web;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
