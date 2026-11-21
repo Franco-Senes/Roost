@@ -1,0 +1,12 @@
+services:
+  vaultwarden:
+    image: vaultwarden/server:1.33.2
+    container_name: roost-vaultwarden
+    restart: unless-stopped
+    ports:
+      - "8082:80"
+    volumes:
+      - "${ROOST_DATA_DIR:-/var/lib/roost}/apps/vaultwarden/data:/data"
+    labels:
+      roost.managed: "true"
+      roost.app: "vaultwarden"
