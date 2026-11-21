@@ -3,26 +3,34 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::{Path, State};
-use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri, header};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
+use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::error::RecvError;
+use tower_http::compression::CompressionLayer;
 
 use crate::apps::{AppError, AppService};
 use crate::auth::{AuthError, AuthService, Role, SESSION_TTL_SECS, SessionInfo, constant_time_eq};
+use crate::db::Database;
 use crate::metrics::MetricsService;
 
 const SESSION_COOKIE: &str = "roost_session";
 const CSRF_HEADER: &str = "x-csrf-token";
+
+#[derive(RustEmbed)]
+#[folder = "../../web/dist"]
+struct WebAssets;
 
 /// Estado compartido del servidor HTTP de Roost.
 #[derive(Clone)]
 pub struct AppState {
     pub apps: Arc<AppService>,
     pub auth: Arc<AuthService>,
+    pub db: Database,
     pub metrics: MetricsService,
     pub secure_cookies: bool,
 }
@@ -30,7 +38,6 @@ pub struct AppState {
 /// Construye el router HTTP principal de Roost con el estado provisto.
 pub fn router(state: AppState) -> Router {
     Router::new()
-        .route("/", get(index))
         // Primer arranque y sesión (públicas)
         .route("/api/setup", get(get_setup).post(post_setup))
         .route("/api/login", post(post_login))
@@ -40,10 +47,13 @@ pub fn router(state: AppState) -> Router {
         // Gestión de usuarios (admin)
         .route("/api/users", get(list_users).post(create_user))
         .route("/api/users/{id}", patch(update_user).delete(delete_user))
+        // Ajustes
+        .route("/api/settings", get(get_settings).patch(patch_settings))
         // Sistema y métricas
         .route("/api/system", get(get_system))
         // Tienda, apps y eventos
         .route("/api/store", get(get_store))
+        .route("/api/store/{id}/icon", get(get_store_icon))
         .route("/api/apps", get(get_installed_apps))
         .route("/api/apps/{id}/install", post(install_app))
         .route("/api/apps/{id}/start", post(start_app))
@@ -51,11 +61,60 @@ pub fn router(state: AppState) -> Router {
         .route("/api/apps/{id}/restart", post(restart_app))
         .route("/api/apps/{id}", delete(uninstall_app))
         .route("/api/events", get(events_sse))
+        // Interfaz Material 3 embebida (SPA fallback)
+        .fallback(serve_web_asset)
+        .layer(CompressionLayer::new())
         .with_state(state)
 }
 
-async fn index() -> &'static str {
-    "Roost"
+fn content_type_for(path: &str) -> &'static str {
+    if path.ends_with(".html") {
+        "text/html; charset=utf-8"
+    } else if path.ends_with(".js") {
+        "application/javascript; charset=utf-8"
+    } else if path.ends_with(".css") {
+        "text/css; charset=utf-8"
+    } else if path.ends_with(".svg") {
+        "image/svg+xml"
+    } else if path.ends_with(".webmanifest") || path.ends_with(".json") {
+        "application/manifest+json; charset=utf-8"
+    } else if path.ends_with(".png") {
+        "image/png"
+    } else if path.ends_with(".webp") {
+        "image/webp"
+    } else {
+        "application/octet-stream"
+    }
+}
+
+async fn serve_web_asset(uri: Uri) -> Response {
+    let raw_path = uri.path().trim_start_matches('/');
+    let path = if raw_path.is_empty() {
+        "index.html"
+    } else {
+        raw_path
+    };
+
+    let (asset_path, file) = match WebAssets::get(path) {
+        Some(f) => (path, f),
+        None => match WebAssets::get("index.html") {
+            Some(f) => ("index.html", f),
+            None => return (StatusCode::OK, "Roost").into_response(),
+        },
+    };
+
+    let mut resp = (StatusCode::OK, file.data.into_owned()).into_response();
+    resp.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static(content_type_for(asset_path)),
+    );
+    if asset_path.starts_with("assets/") {
+        resp.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("public, max-age=31536000, immutable"),
+        );
+    }
+    resp
 }
 
 #[derive(Serialize)]
@@ -411,6 +470,110 @@ async fn get_store(State(state): State<AppState>, headers: HeaderMap) -> Respons
     Json(state.apps.store().to_vec()).into_response()
 }
 
+async fn get_store_icon(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    if let Err(err) = require_session(&state, &headers).await {
+        return auth_error_response(err);
+    }
+    match state.apps.icon_svg(&id) {
+        Some(svg) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "image/svg+xml")],
+            svg.to_string(),
+        )
+            .into_response(),
+        None => app_error_response(AppError::NotFound(
+            "No encontramos el ícono de esa app.".to_string(),
+        )),
+    }
+}
+
+#[derive(Deserialize)]
+struct PatchSettingsRequest {
+    theme: Option<String>,
+    mode: Option<String>,
+    server_name: Option<String>,
+}
+
+async fn get_settings(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(err) = require_session(&state, &headers).await {
+        return auth_error_response(err);
+    }
+    match state.db.get_settings().await {
+        Ok(mut map) => {
+            map.entry("theme".to_string())
+                .or_insert_with(|| "green".to_string());
+            map.entry("mode".to_string())
+                .or_insert_with(|| "light".to_string());
+            map.entry("server_name".to_string())
+                .or_insert_with(|| "Roost".to_string());
+            Json(map).into_response()
+        }
+        Err(_) => auth_error_response(AuthError::Internal(
+            "No pudimos leer los ajustes.".to_string(),
+        )),
+    }
+}
+
+async fn patch_settings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<PatchSettingsRequest>,
+) -> Response {
+    let session = match require_session(&state, &headers).await {
+        Ok(s) => s,
+        Err(err) => return auth_error_response(err),
+    };
+    if let Err(err) = require_csrf(&session, &headers) {
+        return auth_error_response(err);
+    }
+
+    if let Some(theme) = req.theme {
+        if !matches!(theme.as_str(), "green" | "blue" | "purple") {
+            return auth_error_response(AuthError::BadRequest(
+                "Tema inválido. Elegí Verde, Azul o Violeta.".to_string(),
+            ));
+        }
+        if state.db.set_setting("theme", &theme).await.is_err() {
+            return auth_error_response(AuthError::Internal(
+                "No pudimos guardar el tema.".to_string(),
+            ));
+        }
+    }
+
+    if let Some(mode) = req.mode {
+        if !matches!(mode.as_str(), "light" | "dark") {
+            return auth_error_response(AuthError::BadRequest(
+                "Modo inválido. Elegí claro u oscuro.".to_string(),
+            ));
+        }
+        if state.db.set_setting("mode", &mode).await.is_err() {
+            return auth_error_response(AuthError::Internal(
+                "No pudimos guardar el modo.".to_string(),
+            ));
+        }
+    }
+
+    if let Some(name) = req.server_name {
+        let trimmed = name.trim();
+        if trimmed.is_empty() || trimmed.len() > 64 {
+            return auth_error_response(AuthError::BadRequest(
+                "El nombre del servidor debe tener entre 1 y 64 caracteres.".to_string(),
+            ));
+        }
+        if state.db.set_setting("server_name", trimmed).await.is_err() {
+            return auth_error_response(AuthError::Internal(
+                "No pudimos guardar el nombre del servidor.".to_string(),
+            ));
+        }
+    }
+
+    get_settings(State(state), headers).await
+}
+
 async fn get_installed_apps(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if let Err(err) = require_session(&state, &headers).await {
         return auth_error_response(err);
@@ -619,6 +782,7 @@ mod tests {
         AppState {
             apps: Arc::new(service),
             auth,
+            db,
             metrics: MetricsService::new(true),
             secure_cookies: false,
         }
@@ -669,7 +833,8 @@ mod tests {
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
         let bytes = res.into_body().collect().await.unwrap().to_bytes();
-        assert_eq!(bytes.as_ref(), b"Roost");
+        let html = std::str::from_utf8(&bytes).unwrap();
+        assert!(html.contains("Roost"));
 
         let unauth = router(state)
             .oneshot(
@@ -935,5 +1100,42 @@ mod tests {
         let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert!(body["ram_total_mb"].as_u64().unwrap() > 0);
         assert_eq!(body["demo"], true);
+    }
+
+    #[tokio::test]
+    async fn settings_and_store_icons_work_with_session() {
+        let state = test_state(4096).await;
+        let (admin_cookie, admin_csrf) = setup_admin_session(&state).await;
+
+        let icon = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/store/jellyfin/icon")
+                    .header(header::COOKIE, &admin_cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(icon.status(), StatusCode::OK);
+
+        let patch = router(state)
+            .oneshot(
+                Request::builder()
+                    .method(Method::PATCH)
+                    .uri("/api/settings")
+                    .header(header::COOKIE, &admin_cookie)
+                    .header(CSRF_HEADER, &admin_csrf)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"theme":"purple","mode":"dark"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(patch.status(), StatusCode::OK);
+        let bytes = patch.into_body().collect().await.unwrap().to_bytes();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["theme"], "purple");
+        assert_eq!(body["mode"], "dark");
     }
 }
