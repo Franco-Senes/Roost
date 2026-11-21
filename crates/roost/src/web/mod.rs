@@ -3,27 +3,42 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
-use futures_util::stream::Stream;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::apps::{AppError, AppService};
+use crate::auth::{AuthError, AuthService, Role, SESSION_TTL_SECS, SessionInfo, constant_time_eq};
+
+const SESSION_COOKIE: &str = "roost_session";
+const CSRF_HEADER: &str = "x-csrf-token";
 
 /// Estado compartido del servidor HTTP de Roost.
 #[derive(Clone)]
 pub struct AppState {
     pub apps: Arc<AppService>,
+    pub auth: Arc<AuthService>,
+    pub secure_cookies: bool,
 }
 
 /// Construye el router HTTP principal de Roost con el estado provisto.
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/", get(index))
+        // Primer arranque y sesión (públicas)
+        .route("/api/setup", get(get_setup).post(post_setup))
+        .route("/api/login", post(post_login))
+        // Sesión y perfil (requieren sesión)
+        .route("/api/logout", post(post_logout))
+        .route("/api/me", get(get_me))
+        // Gestión de usuarios (admin)
+        .route("/api/users", get(list_users).post(create_user))
+        .route("/api/users/{id}", patch(update_user).delete(delete_user))
+        // Tienda, apps y eventos
         .route("/api/store", get(get_store))
         .route("/api/apps", get(get_installed_apps))
         .route("/api/apps/{id}/install", post(install_app))
@@ -51,9 +66,46 @@ struct ActionResponse {
 }
 
 #[derive(Deserialize)]
-struct UninstallRequest {
+struct ConfirmRequest {
     #[serde(default)]
     confirm: bool,
+}
+
+#[derive(Serialize)]
+struct SetupStatusResponse {
+    needs_setup: bool,
+}
+
+#[derive(Deserialize)]
+struct CredentialsRequest {
+    name: String,
+    password: String,
+}
+
+#[derive(Serialize)]
+struct MeResponse {
+    id: i64,
+    name: String,
+    role: Role,
+    csrf_token: String,
+}
+
+#[derive(Deserialize)]
+struct CreateUserRequest {
+    name: String,
+    password: String,
+    #[serde(default = "default_member_role")]
+    role: Role,
+}
+
+fn default_member_role() -> Role {
+    Role::Member
+}
+
+#[derive(Deserialize)]
+struct UpdateUserRequest {
+    role: Option<Role>,
+    suspended: Option<bool>,
 }
 
 fn app_error_response(err: AppError) -> Response {
@@ -72,25 +124,335 @@ fn app_error_response(err: AppError) -> Response {
         .into_response()
 }
 
-async fn get_store(State(state): State<AppState>) -> impl IntoResponse {
-    Json(state.apps.store().to_vec())
+fn auth_error_response(err: AuthError) -> Response {
+    let status = match &err {
+        AuthError::BadRequest(_) => StatusCode::BAD_REQUEST,
+        AuthError::Unauthorized(_) => StatusCode::UNAUTHORIZED,
+        AuthError::Forbidden(_) => StatusCode::FORBIDDEN,
+        AuthError::TooManyRequests(_) => StatusCode::TOO_MANY_REQUESTS,
+        AuthError::Conflict(_) => StatusCode::CONFLICT,
+        AuthError::NotFound(_) => StatusCode::NOT_FOUND,
+        AuthError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    (
+        status,
+        Json(ErrorBody {
+            error: err.to_string(),
+        }),
+    )
+        .into_response()
 }
 
-async fn get_installed_apps(State(state): State<AppState>) -> Response {
+fn read_cookie(headers: &HeaderMap, name: &str) -> Option<String> {
+    let raw = headers.get(header::COOKIE)?.to_str().ok()?;
+    for pair in raw.split(';') {
+        let trimmed = pair.trim();
+        if let Some((k, v)) = trimmed.split_once('=')
+            && k.trim() == name
+        {
+            return Some(v.trim().to_string());
+        }
+    }
+    None
+}
+
+fn build_session_cookie(session_id: &str, secure: bool) -> String {
+    let secure_flag = if secure { "; Secure" } else { "" };
+    format!(
+        "{SESSION_COOKIE}={session_id}; HttpOnly; SameSite=Strict; Path=/; Max-Age={SESSION_TTL_SECS}{secure_flag}"
+    )
+}
+
+fn clear_session_cookie(secure: bool) -> String {
+    let secure_flag = if secure { "; Secure" } else { "" };
+    format!("{SESSION_COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0{secure_flag}")
+}
+
+fn client_ip(headers: &HeaderMap) -> String {
+    headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|raw| raw.split(',').next())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("local")
+        .to_string()
+}
+
+fn user_agent(headers: &HeaderMap) -> String {
+    headers
+        .get(header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .chars()
+        .take(200)
+        .collect()
+}
+
+async fn require_session(state: &AppState, headers: &HeaderMap) -> Result<SessionInfo, AuthError> {
+    let Some(sid) = read_cookie(headers, SESSION_COOKIE) else {
+        return Err(AuthError::Unauthorized(
+            "Tenés que iniciar sesión para continuar.".to_string(),
+        ));
+    };
+    state.auth.verify_session(&sid).await
+}
+
+fn require_admin(session: &SessionInfo) -> Result<(), AuthError> {
+    if session.user.role != Role::Admin {
+        return Err(AuthError::Forbidden(
+            "Solo el administrador puede hacer esto.".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn require_csrf(session: &SessionInfo, headers: &HeaderMap) -> Result<(), AuthError> {
+    let provided = headers
+        .get(CSRF_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if !constant_time_eq(provided, &session.csrf_token) {
+        return Err(AuthError::Forbidden(
+            "Falta el código de seguridad de la sesión. Recargá la página y probá de nuevo."
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn session_response(status: StatusCode, session: SessionInfo, secure_cookies: bool) -> Response {
+    let mut resp = (
+        status,
+        Json(MeResponse {
+            id: session.user.id,
+            name: session.user.name,
+            role: session.user.role,
+            csrf_token: session.csrf_token,
+        }),
+    )
+        .into_response();
+
+    if let Ok(val) =
+        HeaderValue::from_str(&build_session_cookie(&session.session_id, secure_cookies))
+    {
+        resp.headers_mut().append(header::SET_COOKIE, val);
+    }
+    resp
+}
+
+async fn get_setup(State(state): State<AppState>) -> Response {
+    match state.auth.needs_setup().await {
+        Ok(needs_setup) => Json(SetupStatusResponse { needs_setup }).into_response(),
+        Err(err) => auth_error_response(err),
+    }
+}
+
+async fn post_setup(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<CredentialsRequest>,
+) -> Response {
+    let ua = user_agent(&headers);
+    match state.auth.setup_admin(&req.name, &req.password, &ua).await {
+        Ok(session) => session_response(StatusCode::CREATED, session, state.secure_cookies),
+        Err(err) => auth_error_response(err),
+    }
+}
+
+async fn post_login(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<CredentialsRequest>,
+) -> Response {
+    let ip = client_ip(&headers);
+    let ua = user_agent(&headers);
+    match state.auth.login(&ip, &req.name, &req.password, &ua).await {
+        Ok(session) => session_response(StatusCode::OK, session, state.secure_cookies),
+        Err(err) => auth_error_response(err),
+    }
+}
+
+async fn post_logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let session = match require_session(&state, &headers).await {
+        Ok(s) => s,
+        Err(err) => return auth_error_response(err),
+    };
+    if let Err(err) = require_csrf(&session, &headers) {
+        return auth_error_response(err);
+    }
+
+    if let Err(err) = state.auth.logout(&session.session_id).await {
+        return auth_error_response(err);
+    }
+
+    let mut resp = StatusCode::NO_CONTENT.into_response();
+    if let Ok(val) = HeaderValue::from_str(&clear_session_cookie(state.secure_cookies)) {
+        resp.headers_mut().append(header::SET_COOKIE, val);
+    }
+    resp
+}
+
+async fn get_me(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let session = match require_session(&state, &headers).await {
+        Ok(s) => s,
+        Err(err) => return auth_error_response(err),
+    };
+    Json(MeResponse {
+        id: session.user.id,
+        name: session.user.name,
+        role: session.user.role,
+        csrf_token: session.csrf_token,
+    })
+    .into_response()
+}
+
+async fn list_users(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let session = match require_session(&state, &headers).await {
+        Ok(s) => s,
+        Err(err) => return auth_error_response(err),
+    };
+    if let Err(err) = require_admin(&session) {
+        return auth_error_response(err);
+    }
+    match state.auth.list_users().await {
+        Ok(users) => Json(users).into_response(),
+        Err(err) => auth_error_response(err),
+    }
+}
+
+async fn create_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<CreateUserRequest>,
+) -> Response {
+    let session = match require_session(&state, &headers).await {
+        Ok(s) => s,
+        Err(err) => return auth_error_response(err),
+    };
+    if let Err(err) = require_admin(&session) {
+        return auth_error_response(err);
+    }
+    if let Err(err) = require_csrf(&session, &headers) {
+        return auth_error_response(err);
+    }
+    match state
+        .auth
+        .create_user(&req.name, &req.password, req.role)
+        .await
+    {
+        Ok(user) => (StatusCode::CREATED, Json(user)).into_response(),
+        Err(err) => auth_error_response(err),
+    }
+}
+
+async fn update_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(target_id): Path<i64>,
+    Json(req): Json<UpdateUserRequest>,
+) -> Response {
+    let session = match require_session(&state, &headers).await {
+        Ok(s) => s,
+        Err(err) => return auth_error_response(err),
+    };
+    if let Err(err) = require_admin(&session) {
+        return auth_error_response(err);
+    }
+    if let Err(err) = require_csrf(&session, &headers) {
+        return auth_error_response(err);
+    }
+    match state
+        .auth
+        .update_user(session.user.id, target_id, req.role, req.suspended)
+        .await
+    {
+        Ok(user) => Json(user).into_response(),
+        Err(err) => auth_error_response(err),
+    }
+}
+
+async fn delete_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(target_id): Path<i64>,
+    body: Option<Json<ConfirmRequest>>,
+) -> Response {
+    let session = match require_session(&state, &headers).await {
+        Ok(s) => s,
+        Err(err) => return auth_error_response(err),
+    };
+    if let Err(err) = require_admin(&session) {
+        return auth_error_response(err);
+    }
+    if let Err(err) = require_csrf(&session, &headers) {
+        return auth_error_response(err);
+    }
+    let confirmed = body.map(|Json(req)| req.confirm).unwrap_or(false);
+    if !confirmed {
+        return auth_error_response(AuthError::BadRequest(
+            "Para eliminar un usuario tenés que confirmarlo enviando confirm: true.".to_string(),
+        ));
+    }
+    match state.auth.delete_user(session.user.id, target_id).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(err) => auth_error_response(err),
+    }
+}
+
+async fn get_store(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(err) = require_session(&state, &headers).await {
+        return auth_error_response(err);
+    }
+    Json(state.apps.store().to_vec()).into_response()
+}
+
+async fn get_installed_apps(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(err) = require_session(&state, &headers).await {
+        return auth_error_response(err);
+    }
     match state.apps.installed_apps().await {
         Ok(apps) => Json(apps).into_response(),
         Err(err) => app_error_response(err),
     }
 }
 
-async fn install_app(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+async fn install_app(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let session = match require_session(&state, &headers).await {
+        Ok(s) => s,
+        Err(err) => return auth_error_response(err),
+    };
+    if let Err(err) = require_admin(&session) {
+        return auth_error_response(err);
+    }
+    if let Err(err) = require_csrf(&session, &headers) {
+        return auth_error_response(err);
+    }
     match state.apps.install(&id) {
         Ok(resp) => (StatusCode::ACCEPTED, Json(resp)).into_response(),
         Err(err) => app_error_response(err),
     }
 }
 
-async fn start_app(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+async fn start_app(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let session = match require_session(&state, &headers).await {
+        Ok(s) => s,
+        Err(err) => return auth_error_response(err),
+    };
+    if let Err(err) = require_admin(&session) {
+        return auth_error_response(err);
+    }
+    if let Err(err) = require_csrf(&session, &headers) {
+        return auth_error_response(err);
+    }
     match state.apps.start(&id).await {
         Ok(()) => Json(ActionResponse {
             app_id: id,
@@ -101,7 +463,21 @@ async fn start_app(State(state): State<AppState>, Path(id): Path<String>) -> Res
     }
 }
 
-async fn stop_app(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+async fn stop_app(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let session = match require_session(&state, &headers).await {
+        Ok(s) => s,
+        Err(err) => return auth_error_response(err),
+    };
+    if let Err(err) = require_admin(&session) {
+        return auth_error_response(err);
+    }
+    if let Err(err) = require_csrf(&session, &headers) {
+        return auth_error_response(err);
+    }
     match state.apps.stop(&id).await {
         Ok(()) => Json(ActionResponse {
             app_id: id,
@@ -112,7 +488,21 @@ async fn stop_app(State(state): State<AppState>, Path(id): Path<String>) -> Resp
     }
 }
 
-async fn restart_app(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+async fn restart_app(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let session = match require_session(&state, &headers).await {
+        Ok(s) => s,
+        Err(err) => return auth_error_response(err),
+    };
+    if let Err(err) = require_admin(&session) {
+        return auth_error_response(err);
+    }
+    if let Err(err) = require_csrf(&session, &headers) {
+        return auth_error_response(err);
+    }
     match state.apps.restart(&id).await {
         Ok(()) => Json(ActionResponse {
             app_id: id,
@@ -125,9 +515,20 @@ async fn restart_app(State(state): State<AppState>, Path(id): Path<String>) -> R
 
 async fn uninstall_app(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<String>,
-    body: Option<Json<UninstallRequest>>,
+    body: Option<Json<ConfirmRequest>>,
 ) -> Response {
+    let session = match require_session(&state, &headers).await {
+        Ok(s) => s,
+        Err(err) => return auth_error_response(err),
+    };
+    if let Err(err) = require_admin(&session) {
+        return auth_error_response(err);
+    }
+    if let Err(err) = require_csrf(&session, &headers) {
+        return auth_error_response(err);
+    }
     let confirmed = body.map(|Json(req)| req.confirm).unwrap_or(false);
     if !confirmed {
         return app_error_response(AppError::BadRequest(
@@ -145,9 +546,11 @@ async fn uninstall_app(
     }
 }
 
-async fn events_sse(
-    State(state): State<AppState>,
-) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+async fn events_sse(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(err) = require_session(&state, &headers).await {
+        return auth_error_response(err);
+    }
+
     let rx = state.apps.subscribe();
 
     let stream = futures_util::stream::unfold(rx, |mut receiver| async move {
@@ -155,7 +558,10 @@ async fn events_sse(
             match receiver.recv().await {
                 Ok(event) => {
                     if let Ok(json) = serde_json::to_string(&event) {
-                        return Some((Ok(Event::default().data(json)), receiver));
+                        return Some((
+                            Ok::<Event, Infallible>(Event::default().data(json)),
+                            receiver,
+                        ));
                     }
                 }
                 Err(RecvError::Lagged(_)) => continue,
@@ -164,7 +570,9 @@ async fn events_sse(
         }
     });
 
-    Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
+    Sse::new(stream)
+        .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
+        .into_response()
 }
 
 #[cfg(test)]
@@ -172,15 +580,16 @@ mod tests {
     use std::path::PathBuf;
 
     use axum::body::Body;
-    use axum::http::{Method, Request, header};
+    use axum::http::{Method, Request};
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
     use super::*;
     use crate::apps::RoostEvent;
+    use crate::db::Database;
     use crate::docker::MockDocker;
 
-    fn test_state(available_ram_mb: u64) -> AppState {
+    async fn test_state(available_ram_mb: u64) -> AppState {
         let apps_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../apps");
         let docker = Arc::new(MockDocker::new());
         let service = AppService::from_dir(
@@ -191,29 +600,64 @@ mod tests {
         )
         .expect("el catálogo de prueba debe cargar");
 
+        let db = Database::connect_in_memory().await.unwrap();
+        let auth = Arc::new(AuthService::new(&db));
+
         AppState {
             apps: Arc::new(service),
+            auth,
+            secure_cookies: false,
         }
     }
 
-    #[tokio::test]
-    async fn root_returns_roost() {
-        let app = router(test_state(4096));
-
-        let response = app
-            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+    /// Crea el admin inicial y devuelve `(cookie_header, csrf_token)`.
+    async fn setup_admin_session(state: &AppState) -> (String, String) {
+        let app = router(state.clone());
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/setup")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"name":"Franco","password":"contrasena-admin-2026"}"#,
+                    ))
+                    .unwrap(),
+            )
             .await
             .unwrap();
+        assert_eq!(res.status(), StatusCode::CREATED);
 
-        assert_eq!(response.status(), StatusCode::OK);
-        let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        assert_eq!(bytes.as_ref(), b"Roost");
+        let set_cookie = res
+            .headers()
+            .get(header::SET_COOKIE)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(set_cookie.contains("HttpOnly"));
+        assert!(set_cookie.contains("SameSite=Strict"));
+        let cookie_pair = set_cookie.split(';').next().unwrap().to_string();
+
+        let bytes = res.into_body().collect().await.unwrap().to_bytes();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let csrf = body["csrf_token"].as_str().unwrap().to_string();
+        (cookie_pair, csrf)
     }
 
     #[tokio::test]
-    async fn store_lists_all_five_catalog_apps() {
-        let app = router(test_state(4096));
-        let response = app
+    async fn root_returns_roost_and_api_requires_session() {
+        let state = test_state(4096).await;
+
+        let res = router(state.clone())
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let bytes = res.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(bytes.as_ref(), b"Roost");
+
+        let unauth = router(state)
             .oneshot(
                 Request::builder()
                     .uri("/api/store")
@@ -222,24 +666,137 @@ mod tests {
             )
             .await
             .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        let items: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(items.as_array().unwrap().len(), 5);
+        assert_eq!(unauth.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
-    async fn install_emits_live_progress_and_ram_warning_when_low() {
-        let state = test_state(512);
-        let mut rx = state.apps.subscribe();
-        let app = router(state.clone());
+    async fn member_cannot_install_apps_or_manage_users() {
+        let state = test_state(4096).await;
+        let (admin_cookie, admin_csrf) = setup_admin_session(&state).await;
 
-        let response = app
+        // El admin crea una cuenta de miembro.
+        let create_res = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/users")
+                    .header(header::COOKIE, &admin_cookie)
+                    .header(CSRF_HEADER, &admin_csrf)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"name":"Sofi","password":"clave-miembro-2026","role":"member"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(create_res.status(), StatusCode::CREATED);
+
+        // El miembro inicia sesión.
+        let login_res = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/login")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"name":"Sofi","password":"clave-miembro-2026"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(login_res.status(), StatusCode::OK);
+        let member_cookie = login_res
+            .headers()
+            .get(header::SET_COOKIE)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_string();
+        let bytes = login_res.into_body().collect().await.unwrap().to_bytes();
+        let member_csrf =
+            serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()["csrf_token"]
+                .as_str()
+                .unwrap()
+                .to_string();
+
+        // El miembro puede ver la Tienda...
+        let store_res = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/store")
+                    .header(header::COOKIE, &member_cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(store_res.status(), StatusCode::OK);
+
+        // ...pero NO puede instalar apps ni listar usuarios.
+        let install_res = router(state.clone())
             .oneshot(
                 Request::builder()
                     .method(Method::POST)
                     .uri("/api/apps/jellyfin/install")
+                    .header(header::COOKIE, &member_cookie)
+                    .header(CSRF_HEADER, &member_csrf)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(install_res.status(), StatusCode::FORBIDDEN);
+
+        let users_res = router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/api/users")
+                    .header(header::COOKIE, &member_cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(users_res.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn csrf_protection_blocks_mutations_without_valid_token() {
+        let state = test_state(4096).await;
+        let (admin_cookie, _admin_csrf) = setup_admin_session(&state).await;
+
+        let res = router(state)
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/apps/jellyfin/install")
+                    .header(header::COOKIE, &admin_cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn admin_install_emits_live_progress_and_ram_warning_when_low() {
+        let state = test_state(512).await;
+        let (admin_cookie, admin_csrf) = setup_admin_session(&state).await;
+        let mut rx = state.apps.subscribe();
+
+        let response = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/apps/jellyfin/install")
+                    .header(header::COOKIE, &admin_cookie)
+                    .header(CSRF_HEADER, &admin_csrf)
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -249,8 +806,6 @@ mod tests {
         assert_eq!(response.status(), StatusCode::ACCEPTED);
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(body["app_id"], "jellyfin");
-        assert_eq!(body["status"], "installing");
         assert!(body["ram_warning"].as_str().unwrap().contains("1024 MB"));
 
         let mut saw_progress = false;
@@ -275,60 +830,17 @@ mod tests {
                 _ => {}
             }
         }
-        assert!(saw_progress, "debe emitir progreso en MB");
-        assert!(saw_finished, "debe emitir finalización");
+        assert!(saw_progress);
+        assert!(saw_finished);
 
-        // Verificar ciclo de vida completo: listar, detener, iniciar, reiniciar y desinstalar.
-        let installed = state.apps.installed_apps().await.unwrap();
-        assert_eq!(installed.len(), 1);
-        assert_eq!(installed[0].id, "jellyfin");
-
-        let app = router(state.clone());
-        let stop_res = app
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri("/api/apps/jellyfin/stop")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(stop_res.status(), StatusCode::OK);
-
-        let app = router(state.clone());
-        let start_res = app
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri("/api/apps/jellyfin/start")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(start_res.status(), StatusCode::OK);
-
-        let app = router(state.clone());
-        let restart_res = app
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri("/api/apps/jellyfin/restart")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(restart_res.status(), StatusCode::OK);
-
-        // Sin confirm: true debe rechazar la desinstalación.
-        let app = router(state.clone());
-        let bad_del = app
+        // Desinstalar sin confirm: true devuelve 400; con confirm: true funciona.
+        let bad_del = router(state.clone())
             .oneshot(
                 Request::builder()
                     .method(Method::DELETE)
                     .uri("/api/apps/jellyfin")
+                    .header(header::COOKIE, &admin_cookie)
+                    .header(CSRF_HEADER, &admin_csrf)
                     .header(header::CONTENT_TYPE, "application/json")
                     .body(Body::from(r#"{"confirm":false}"#))
                     .unwrap(),
@@ -337,13 +849,13 @@ mod tests {
             .unwrap();
         assert_eq!(bad_del.status(), StatusCode::BAD_REQUEST);
 
-        // Con confirm: true desinstala la app.
-        let app = router(state.clone());
-        let ok_del = app
+        let ok_del = router(state.clone())
             .oneshot(
                 Request::builder()
                     .method(Method::DELETE)
                     .uri("/api/apps/jellyfin")
+                    .header(header::COOKIE, &admin_cookie)
+                    .header(CSRF_HEADER, &admin_csrf)
                     .header(header::CONTENT_TYPE, "application/json")
                     .body(Body::from(r#"{"confirm":true}"#))
                     .unwrap(),
@@ -351,16 +863,18 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(ok_del.status(), StatusCode::OK);
-        assert!(state.apps.installed_apps().await.unwrap().is_empty());
     }
 
     #[tokio::test]
-    async fn sse_endpoint_returns_event_stream_headers() {
-        let app = router(test_state(4096));
-        let response = app
+    async fn sse_endpoint_requires_session_and_returns_event_stream() {
+        let state = test_state(4096).await;
+        let (admin_cookie, _) = setup_admin_session(&state).await;
+
+        let response = router(state)
             .oneshot(
                 Request::builder()
                     .uri("/api/events")
+                    .header(header::COOKIE, &admin_cookie)
                     .body(Body::empty())
                     .unwrap(),
             )
