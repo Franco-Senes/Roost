@@ -1,11 +1,19 @@
+use std::collections::HashMap;
+
 use bollard::Docker;
 use bollard::errors::Error as BollardError;
+use bollard::models::{ContainerCreateBody, HostConfig, PortBinding};
 use bollard::query_parameters::{
-    InspectContainerOptionsBuilder, ListContainersOptionsBuilder, StartContainerOptionsBuilder,
-    StopContainerOptionsBuilder,
+    CreateContainerOptionsBuilder, CreateImageOptionsBuilder, InspectContainerOptionsBuilder,
+    ListContainersOptionsBuilder, RemoveContainerOptionsBuilder, RestartContainerOptionsBuilder,
+    StartContainerOptionsBuilder, StopContainerOptionsBuilder,
 };
+use futures_util::StreamExt;
 
-use super::{BoxFuture, ContainerInfo, ContainerState, DockerError, DockerRuntime};
+use super::{
+    BoxFuture, ContainerInfo, ContainerState, DockerError, DockerRuntime, InstallProgress,
+    InstallSpec, ProgressCallback,
+};
 
 /// Implementación real de [`DockerRuntime`] usando `bollard` sobre el socket local.
 #[derive(Clone, Debug)]
@@ -137,6 +145,117 @@ impl DockerRuntime for BollardDocker {
                 }) => Ok(()),
                 Err(err) => Err(map_bollard_error(Some(id), err)),
             }
+        })
+    }
+
+    fn restart_container(&self, id: &str) -> BoxFuture<'_, Result<(), DockerError>> {
+        let id = id.to_string();
+        Box::pin(async move {
+            let id = super::validate_container_id(&id)?;
+            let options = RestartContainerOptionsBuilder::default().t(10).build();
+            self.client
+                .restart_container(id, Some(options))
+                .await
+                .map_err(|err| map_bollard_error(Some(id), err))
+        })
+    }
+
+    fn remove_container(&self, id: &str) -> BoxFuture<'_, Result<(), DockerError>> {
+        let id = id.to_string();
+        Box::pin(async move {
+            let id = super::validate_container_id(&id)?;
+            let options = RemoveContainerOptionsBuilder::default().force(true).build();
+            self.client
+                .remove_container(id, Some(options))
+                .await
+                .map_err(|err| map_bollard_error(Some(id), err))
+        })
+    }
+
+    fn install_app(
+        &self,
+        spec: InstallSpec,
+        on_progress: ProgressCallback,
+    ) -> BoxFuture<'_, Result<ContainerInfo, DockerError>> {
+        Box::pin(async move {
+            let container_name = super::validate_container_id(&spec.container_name)?.to_string();
+
+            let pull_options = CreateImageOptionsBuilder::default()
+                .from_image(&spec.image)
+                .build();
+            let mut stream = self.client.create_image(Some(pull_options), None, None);
+
+            let mut layers: HashMap<String, (u64, u64)> = HashMap::new();
+            while let Some(chunk) = stream.next().await {
+                let info = chunk.map_err(|err| map_bollard_error(Some(&container_name), err))?;
+                if let (Some(layer_id), Some(detail)) = (info.id, info.progress_detail) {
+                    let current = detail.current.unwrap_or(0).max(0) as u64;
+                    let total = detail.total.unwrap_or(0).max(0) as u64;
+                    layers.insert(layer_id, (current, total));
+
+                    let downloaded_bytes: u64 = layers.values().map(|(c, _)| *c).sum();
+                    let total_bytes: u64 = layers.values().map(|(_, t)| *t).sum();
+                    on_progress(InstallProgress {
+                        phase: "downloading".to_string(),
+                        downloaded_bytes,
+                        total_bytes,
+                    });
+                }
+            }
+
+            on_progress(InstallProgress {
+                phase: "starting".to_string(),
+                downloaded_bytes: layers.values().map(|(c, _)| *c).sum(),
+                total_bytes: layers.values().map(|(_, t)| *t).sum(),
+            });
+
+            let mut labels = HashMap::new();
+            labels.insert("roost.managed".to_string(), "true".to_string());
+            labels.insert("roost.app".to_string(), spec.app_id.clone());
+
+            let port_key = format!("{}/tcp", spec.web_port);
+            let mut port_bindings = HashMap::new();
+            port_bindings.insert(
+                port_key,
+                Some(vec![PortBinding {
+                    host_ip: Some("0.0.0.0".to_string()),
+                    host_port: Some(spec.web_port.to_string()),
+                }]),
+            );
+
+            let host_config = HostConfig {
+                binds: Some(vec![format!("{}:/data", spec.host_data_dir)]),
+                port_bindings: Some(port_bindings),
+                ..Default::default()
+            };
+
+            let body = ContainerCreateBody {
+                image: Some(spec.image.clone()),
+                labels: Some(labels),
+                host_config: Some(host_config),
+                ..Default::default()
+            };
+
+            let create_opts = CreateContainerOptionsBuilder::default()
+                .name(&container_name)
+                .build();
+
+            let created = self
+                .client
+                .create_container(Some(create_opts), body)
+                .await
+                .map_err(|err| map_bollard_error(Some(&container_name), err))?;
+
+            self.start_container(&created.id).await?;
+
+            Ok(ContainerInfo {
+                id: created.id,
+                name: container_name,
+                image: spec.image,
+                state: ContainerState::Running,
+                status_text: "Up just now".to_string(),
+                app_id: Some(spec.app_id),
+            })
         })
     }
 }

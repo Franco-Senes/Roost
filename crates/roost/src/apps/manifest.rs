@@ -169,6 +169,20 @@ impl AppManifest {
     }
 }
 
+/// Extrae la primera imagen fijada declarada en `compose.yaml`.
+pub fn extract_primary_image(compose_raw: &str) -> Option<String> {
+    for raw_line in compose_raw.lines() {
+        let line = raw_line.trim();
+        if let Some(rest) = line.strip_prefix("image:") {
+            let image = rest.trim().trim_matches('"').trim_matches('\'');
+            if !image.is_empty() {
+                return Some(image.to_string());
+            }
+        }
+    }
+    None
+}
+
 /// Valida que `compose.yaml` cumpla las reglas del catálogo (versiones fijadas,
 /// volúmenes dentro de `apps/<id>/` y sin `privileged: true`).
 pub fn validate_compose(app_id: &str, compose_raw: &str) -> Result<(), CatalogError> {

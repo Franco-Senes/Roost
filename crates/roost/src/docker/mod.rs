@@ -4,6 +4,9 @@ pub mod mock;
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
+
+use serde::{Deserialize, Serialize};
 
 pub use bollard_client::BollardDocker;
 pub use mock::MockDocker;
@@ -12,8 +15,30 @@ pub use mock::MockDocker;
 /// compatible con objetos trait (`dyn DockerRuntime`) sin sumar dependencias.
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-/// Estado simplificado de una instancia gestionada por Docker.
+/// Callback liviano para informar el avance real de una instalación (MB descargados).
+pub type ProgressCallback = Arc<dyn Fn(InstallProgress) + Send + Sync>;
+
+/// Avance de descarga/instalación de una app.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstallProgress {
+    pub phase: String,
+    pub downloaded_bytes: u64,
+    pub total_bytes: u64,
+}
+
+/// Especificación mínima para instalar una app del catálogo en Docker.
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstallSpec {
+    pub app_id: String,
+    pub container_name: String,
+    pub image: String,
+    pub web_port: u16,
+    pub host_data_dir: String,
+}
+
+/// Estado simplificado de una instancia gestionada por Docker.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ContainerState {
     Running,
     Stopped,
@@ -54,7 +79,7 @@ impl fmt::Display for ContainerState {
 }
 
 /// Resumen de un servicio/contenedor devuelto por [`DockerRuntime::list_containers`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContainerInfo {
     pub id: String,
     pub name: String,
@@ -126,6 +151,19 @@ pub trait DockerRuntime: Send + Sync {
 
     /// Detiene una instancia en ejecución. Si ya está detenida, finaliza sin error.
     fn stop_container(&self, id: &str) -> BoxFuture<'_, Result<(), DockerError>>;
+
+    /// Reinicia una instancia existente.
+    fn restart_container(&self, id: &str) -> BoxFuture<'_, Result<(), DockerError>>;
+
+    /// Elimina una instancia instalada (deteniéndola si hace falta).
+    fn remove_container(&self, id: &str) -> BoxFuture<'_, Result<(), DockerError>>;
+
+    /// Descarga, crea e inicia una app del catálogo reportando el progreso real.
+    fn install_app(
+        &self,
+        spec: InstallSpec,
+        on_progress: ProgressCallback,
+    ) -> BoxFuture<'_, Result<ContainerInfo, DockerError>>;
 }
 
 #[cfg(test)]
