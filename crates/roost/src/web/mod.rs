@@ -13,6 +13,7 @@ use tokio::sync::broadcast::error::RecvError;
 
 use crate::apps::{AppError, AppService};
 use crate::auth::{AuthError, AuthService, Role, SESSION_TTL_SECS, SessionInfo, constant_time_eq};
+use crate::metrics::MetricsService;
 
 const SESSION_COOKIE: &str = "roost_session";
 const CSRF_HEADER: &str = "x-csrf-token";
@@ -22,6 +23,7 @@ const CSRF_HEADER: &str = "x-csrf-token";
 pub struct AppState {
     pub apps: Arc<AppService>,
     pub auth: Arc<AuthService>,
+    pub metrics: MetricsService,
     pub secure_cookies: bool,
 }
 
@@ -38,6 +40,8 @@ pub fn router(state: AppState) -> Router {
         // Gestión de usuarios (admin)
         .route("/api/users", get(list_users).post(create_user))
         .route("/api/users/{id}", patch(update_user).delete(delete_user))
+        // Sistema y métricas
+        .route("/api/system", get(get_system))
         // Tienda, apps y eventos
         .route("/api/store", get(get_store))
         .route("/api/apps", get(get_installed_apps))
@@ -546,29 +550,38 @@ async fn uninstall_app(
     }
 }
 
+async fn get_system(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(err) = require_session(&state, &headers).await {
+        return auth_error_response(err);
+    }
+    Json(state.metrics.snapshot()).into_response()
+}
+
 async fn events_sse(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if let Err(err) = require_session(&state, &headers).await {
         return auth_error_response(err);
     }
 
     let rx = state.apps.subscribe();
+    let viewer_guard = state.metrics.register_viewer();
 
-    let stream = futures_util::stream::unfold(rx, |mut receiver| async move {
-        loop {
-            match receiver.recv().await {
-                Ok(event) => {
-                    if let Ok(json) = serde_json::to_string(&event) {
-                        return Some((
-                            Ok::<Event, Infallible>(Event::default().data(json)),
-                            receiver,
-                        ));
+    let stream =
+        futures_util::stream::unfold((rx, viewer_guard), |(mut receiver, guard)| async move {
+            loop {
+                match receiver.recv().await {
+                    Ok(event) => {
+                        if let Ok(json) = serde_json::to_string(&event) {
+                            return Some((
+                                Ok::<Event, Infallible>(Event::default().data(json)),
+                                (receiver, guard),
+                            ));
+                        }
                     }
+                    Err(RecvError::Lagged(_)) => continue,
+                    Err(RecvError::Closed) => return None,
                 }
-                Err(RecvError::Lagged(_)) => continue,
-                Err(RecvError::Closed) => return None,
             }
-        }
-    });
+        });
 
     Sse::new(stream)
         .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
@@ -606,6 +619,7 @@ mod tests {
         AppState {
             apps: Arc::new(service),
             auth,
+            metrics: MetricsService::new(true),
             secure_cookies: false,
         }
     }
@@ -888,5 +902,38 @@ mod tests {
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
         assert!(ct.starts_with("text/event-stream"));
+    }
+
+    #[tokio::test]
+    async fn system_endpoint_requires_session_and_returns_metrics() {
+        let state = test_state(4096).await;
+
+        let unauth = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/system")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauth.status(), StatusCode::UNAUTHORIZED);
+
+        let (admin_cookie, _) = setup_admin_session(&state).await;
+        let ok = router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/api/system")
+                    .header(header::COOKIE, &admin_cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(ok.status(), StatusCode::OK);
+        let bytes = ok.into_body().collect().await.unwrap().to_bytes();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(body["ram_total_mb"].as_u64().unwrap() > 0);
+        assert_eq!(body["demo"], true);
     }
 }

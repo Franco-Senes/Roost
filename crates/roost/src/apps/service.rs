@@ -8,6 +8,7 @@ use serde::Serialize;
 use tokio::sync::broadcast;
 
 use crate::docker::{ContainerState, DockerError, DockerRuntime, InstallSpec};
+use crate::metrics::SystemSnapshot;
 
 use super::manifest::{
     AppCategory, AppManifest, check_ram_warning, extract_primary_image, load_catalog,
@@ -36,6 +37,7 @@ pub enum RoostEvent {
         app_id: String,
         status: String,
     },
+    SystemMetrics(SystemSnapshot),
 }
 
 /// App instalada vista por la interfaz.
@@ -164,6 +166,11 @@ impl AppService {
     /// Suscribe un cliente SSE a los eventos en vivo de Roost.
     pub fn subscribe(&self) -> broadcast::Receiver<RoostEvent> {
         self.events.subscribe()
+    }
+
+    /// Devuelve el emisor de eventos para publicar métricas en vivo bajo demanda.
+    pub fn event_sender(&self) -> broadcast::Sender<RoostEvent> {
+        self.events.clone()
     }
 
     fn find_manifest(&self, app_id: &str) -> Result<&AppManifest, AppError> {
