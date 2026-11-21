@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use roost::apps::AppService;
 use roost::auth::AuthService;
 use roost::db::Database;
 use roost::docker::{BollardDocker, DockerRuntime, MockDocker};
+use roost::metrics::MetricsService;
 use roost::web::AppState;
 use roost::{bind_addr, web};
 use tokio::net::TcpListener;
@@ -64,8 +66,10 @@ async fn main() {
         }
     };
 
-    // En M5 se reemplaza por lectura real de memoria disponible con `sysinfo`.
-    let ram_provider = Arc::new(|| 4096_u64);
+    let demo_mode = std::env::var("ROOST_DEMO").as_deref() == Ok("1");
+    let metrics = MetricsService::new(demo_mode);
+    let ram_metrics = metrics.clone();
+    let ram_provider = Arc::new(move || ram_metrics.available_ram_mb());
 
     let apps_service = match AppService::from_dir(
         &apps_dir,
@@ -83,9 +87,13 @@ async fn main() {
         }
     };
 
+    // Solo publica métricas cuando hay al menos un panel abierto en /api/events.
+    metrics.spawn_lazy_publisher(apps_service.event_sender(), Duration::from_secs(2));
+
     let state = AppState {
         apps: Arc::new(apps_service),
         auth: Arc::new(AuthService::new(&db)),
+        metrics,
         secure_cookies,
     };
 

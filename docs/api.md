@@ -38,7 +38,25 @@ Devuelve `{ "id", "name", "role", "csrf_token" }` de la persona conectada.
 - `(admin)` `POST /api/apps/{id}/start`, `/stop`, `/restart`: controlan una app instalada (`X-CSRF-Token`).
 - `(admin)` `DELETE /api/apps/{id}`: desinstala una app instalada (`X-CSRF-Token` y `{ "confirm": true }`).
 
+## Sistema y métricas (M5)
+
+### `GET /api/system`
+Devuelve una foto instantánea de CPU, memoria, almacenamiento y temperatura (requiere sesión):
+
+```json
+{
+  "cpu_percent": 12.4,
+  "ram_used_mb": 1024,
+  "ram_total_mb": 4096,
+  "ram_available_mb": 3072,
+  "disk_used_gb": 48.2,
+  "disk_total_gb": 256.0,
+  "temperature_c": 46.5,
+  "demo": false
+}
+```
+
 ## Eventos en tiempo real (SSE)
 
 ### `GET /api/events`
-Abre un flujo `text/event-stream` (requiere sesión). Roost solo envía mensajes cuando ocurre un cambio real (sin polling de fondo).
+Abre un flujo `text/event-stream` (requiere sesión). Roost solo envía mensajes cuando ocurre un cambio real y solo muestrea métricas (`system_metrics`) cada 2 segundos mientras haya al menos un navegador conectado. Con el panel cerrado el consumo de CPU queda en ~0%.
