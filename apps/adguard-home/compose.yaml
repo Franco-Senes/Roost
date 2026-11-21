@@ -1,0 +1,15 @@
+services:
+  adguard-home:
+    image: adguard/adguardhome:v0.107.61
+    container_name: roost-adguard-home
+    restart: unless-stopped
+    ports:
+      - "53:53/tcp"
+      - "53:53/udp"
+      - "3000:3000/tcp"
+    volumes:
+      - "${ROOST_DATA_DIR:-/var/lib/roost}/apps/adguard-home/work:/opt/adguardhome/work"
+      - "${ROOST_DATA_DIR:-/var/lib/roost}/apps/adguard-home/conf:/opt/adguardhome/conf"
+    labels:
+      roost.managed: "true"
+      roost.app: "adguard-home"

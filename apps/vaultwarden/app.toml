@@ -1,0 +1,11 @@
+id = "vaultwarden"
+name = "Vaultwarden"
+tagline = "Todas tus contraseñas seguras y a mano"
+description = "Guardá contraseñas, tarjetas y notas privadas de la familia en una bóveda cifrada dentro de tu casa."
+category = "Seguridad"
+version = "1.33.2"
+web_port = 8082
+ram_recommended_mb = 256
+icon = "icon.svg"
+license = "GPL-3.0-only"
+upstream = "https://github.com/dani-garcia/vaultwarden"

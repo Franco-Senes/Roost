@@ -1,0 +1,11 @@
+id = "home-assistant"
+name = "Home Assistant"
+tagline = "Controlá las luces y sensores de tu casa"
+description = "Automatizá luces, enchufes, cámaras y termostatos desde un solo lugar, sin mandar tus datos afuera."
+category = "Casa"
+version = "2025.5.3"
+web_port = 8123
+ram_recommended_mb = 1024
+icon = "icon.svg"
+license = "Apache-2.0"
+upstream = "https://www.home-assistant.io"

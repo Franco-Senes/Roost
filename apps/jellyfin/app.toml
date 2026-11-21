@@ -1,0 +1,11 @@
+id = "jellyfin"
+name = "Jellyfin"
+tagline = "Tus películas en cualquier pantalla"
+description = "Mirá tus películas, series y música desde la tele, la compu o el celular, todo guardado en tu casa."
+category = "Películas"
+version = "10.10.7"
+web_port = 8096
+ram_recommended_mb = 1024
+icon = "icon.svg"
+license = "GPL-2.0-only"
+upstream = "https://jellyfin.org"

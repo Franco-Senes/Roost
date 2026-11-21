@@ -1,0 +1,11 @@
+id = "adguard-home"
+name = "AdGuard Home"
+tagline = "Navegá sin anuncios en toda la casa"
+description = "Bloquea publicidad y rastreadores en todos los celulares, compus y teles conectados a tu Wi-Fi."
+category = "Red"
+version = "v0.107.61"
+web_port = 3000
+ram_recommended_mb = 256
+icon = "icon.svg"
+license = "GPL-3.0-only"
+upstream = "https://adguard.com/adguard-home.html"

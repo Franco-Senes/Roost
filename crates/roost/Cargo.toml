@@ -9,7 +9,9 @@ description = "Liviano servidor doméstico familiar con tienda de apps, fotos y 
 [dependencies]
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 bollard = { version = "0.21", default-features = false, features = ["pipe"] }
+serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", default-features = false, features = ["macros", "net", "rt-multi-thread", "signal"] }
+toml = { version = "1.2", default-features = false, features = ["parse", "serde", "std"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt"] }
 
