@@ -42,6 +42,8 @@
       ActiveScreen = (await import('./screens/HomeScreen.svelte')).default;
     } else if (name === 'store') {
       ActiveScreen = (await import('./screens/StoreScreen.svelte')).default;
+    } else if (name === 'photos') {
+      ActiveScreen = (await import('./screens/PhotosScreen.svelte')).default;
     } else if (name === 'settings') {
       ActiveScreen = (await import('./screens/SettingsScreen.svelte')).default;
     } else {
@@ -188,11 +190,8 @@
           onThemeChange={applyTheme}
           onLogout={logout}
         />
-      {:else if tab === 'photos'}
-        <section class="card">
-          <h1>Fotos y videos</h1>
-          <p class="muted">Tu galería privada en casa se habilita en el siguiente hito (M7).</p>
-        </section>
+      {:else if tab === 'photos' && ActiveScreen}
+        <ActiveScreen />
       {:else if tab === 'agent'}
         <section class="card">
           <h1>Agente de IA</h1>

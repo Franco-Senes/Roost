@@ -2,7 +2,9 @@ pub mod apps;
 pub mod auth;
 pub mod db;
 pub mod docker;
+pub mod jobs;
 pub mod metrics;
+pub mod photos;
 pub mod web;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};

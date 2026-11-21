@@ -68,4 +68,37 @@ export const api = {
   settings: () => request('/api/settings'),
   updateSettings: (patch) =>
     request('/api/settings', { method: 'PATCH', body: JSON.stringify(patch) }),
+  photos: (params = {}) => {
+    const q = new URLSearchParams();
+    if (params.cursor) q.set('cursor', params.cursor);
+    if (params.album) q.set('album', String(params.album));
+    if (params.trash) q.set('trash', 'true');
+    const qs = q.toString();
+    return request(`/api/photos${qs ? `?${qs}` : ''}`);
+  },
+  uploadPhotoChunk: async (file, uploadId, offset, chunk) => {
+    const headers = {
+      'Content-Type': file.type || 'application/octet-stream',
+      'X-Upload-Id': uploadId,
+      'X-Chunk-Offset': String(offset),
+      'X-Total-Size': String(file.size),
+      'X-Filename': file.name,
+      'X-Taken-At': String(Math.floor((file.lastModified || Date.now()) / 1000)),
+    };
+    if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+    const res = await fetch('/api/photos', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers,
+      body: chunk,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data?.error || 'No pudimos subir el archivo.');
+    return data;
+  },
+  deletePhoto: (id) => request(`/api/photos/${id}`, { method: 'DELETE' }),
+  restorePhoto: (id) => request(`/api/photos/${id}/restore`, { method: 'POST' }),
+  albums: () => request('/api/albums'),
+  createAlbum: (name) =>
+    request('/api/albums', { method: 'POST', body: JSON.stringify({ name }) }),
 };

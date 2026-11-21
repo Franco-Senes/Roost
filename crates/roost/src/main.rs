@@ -7,7 +7,9 @@ use roost::apps::AppService;
 use roost::auth::AuthService;
 use roost::db::Database;
 use roost::docker::{BollardDocker, DockerRuntime, MockDocker};
+use roost::jobs::JobQueue;
 use roost::metrics::MetricsService;
+use roost::photos::PhotoService;
 use roost::web::AppState;
 use roost::{bind_addr, web};
 use tokio::net::TcpListener;
@@ -83,18 +85,45 @@ async fn main() {
                 "No se pudo cargar el catálogo desde '{}': {err}. Arrancando con catálogo vacío.",
                 apps_dir.display()
             );
-            AppService::new(Vec::new(), HashMap::new(), data_dir, docker, ram_provider)
+            AppService::new(
+                Vec::new(),
+                HashMap::new(),
+                data_dir.clone(),
+                docker,
+                ram_provider,
+            )
         }
     };
 
     // Solo publica métricas cuando hay al menos un panel abierto en /api/events.
     metrics.spawn_lazy_publisher(apps_service.event_sender(), Duration::from_secs(2));
 
+    let photo_data_dir = if demo_mode {
+        std::env::temp_dir().join("roost-demo-data")
+    } else {
+        data_dir
+    };
+    let jobs = JobQueue::new(&db);
+    let photos = PhotoService::new(&db, photo_data_dir, jobs.clone());
+    let worker_photos = photos.clone();
+    jobs.spawn_worker(metrics.clone(), move |job| {
+        let svc = worker_photos.clone();
+        async move {
+            if job.kind == "photo_thumb"
+                && let Ok(photo_id) = job.payload.parse::<i64>()
+            {
+                svc.generate_thumbnails(photo_id).await?;
+            }
+            Ok(())
+        }
+    });
+
     let state = AppState {
         apps: Arc::new(apps_service),
         auth: Arc::new(AuthService::new(&db)),
         db,
         metrics,
+        photos,
         secure_cookies,
     };
 

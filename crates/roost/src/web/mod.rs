@@ -1,3 +1,5 @@
+mod photos_routes;
+
 use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,6 +19,7 @@ use crate::apps::{AppError, AppService};
 use crate::auth::{AuthError, AuthService, Role, SESSION_TTL_SECS, SessionInfo, constant_time_eq};
 use crate::db::Database;
 use crate::metrics::MetricsService;
+use crate::photos::PhotoService;
 
 const SESSION_COOKIE: &str = "roost_session";
 const CSRF_HEADER: &str = "x-csrf-token";
@@ -32,6 +35,7 @@ pub struct AppState {
     pub auth: Arc<AuthService>,
     pub db: Database,
     pub metrics: MetricsService,
+    pub photos: PhotoService,
     pub secure_cookies: bool,
 }
 
@@ -61,6 +65,38 @@ pub fn router(state: AppState) -> Router {
         .route("/api/apps/{id}/restart", post(restart_app))
         .route("/api/apps/{id}", delete(uninstall_app))
         .route("/api/events", get(events_sse))
+        // Fotos, videos y álbumes (M7)
+        .route(
+            "/api/photos",
+            get(photos_routes::list_photos).post(photos_routes::upload_photo),
+        )
+        .route(
+            "/api/photos/{id}/thumb/{size}",
+            get(photos_routes::get_photo_thumb),
+        )
+        .route(
+            "/api/photos/{id}/original",
+            get(photos_routes::get_photo_original),
+        )
+        .route("/api/photos/{id}/stream", get(photos_routes::stream_photo))
+        .route("/api/photos/{id}", delete(photos_routes::delete_photo))
+        .route(
+            "/api/photos/{id}/restore",
+            post(photos_routes::restore_photo),
+        )
+        .route(
+            "/api/albums",
+            get(photos_routes::list_albums).post(photos_routes::create_album),
+        )
+        .route(
+            "/api/albums/{id}",
+            patch(photos_routes::patch_album).delete(photos_routes::delete_album),
+        )
+        .route("/api/albums/{id}/share", post(photos_routes::share_album))
+        .route(
+            "/api/albums/{id}/photos",
+            post(photos_routes::add_album_photo),
+        )
         // Interfaz Material 3 embebida (SPA fallback)
         .fallback(serve_web_asset)
         .layer(CompressionLayer::new())
@@ -778,12 +814,15 @@ mod tests {
 
         let db = Database::connect_in_memory().await.unwrap();
         let auth = Arc::new(AuthService::new(&db));
+        let jobs = crate::jobs::JobQueue::new(&db);
+        let photos = PhotoService::new(&db, std::env::temp_dir().join("roost-web-test"), jobs);
 
         AppState {
             apps: Arc::new(service),
             auth,
             db,
             metrics: MetricsService::new(true),
+            photos,
             secure_cookies: false,
         }
     }
