@@ -6,7 +6,7 @@ Seguimiento de los hitos definidos en [`AGENTS.md`](AGENTS.md).
 - [x] **M1 — Docker**: módulo `docker` detrás de un trait (listar, iniciar, detener y ver estado).
 - [x] **M2 — Catálogo**: formato `app.toml`, `docs/apps.md` y las 5 apps iniciales.
 - [x] **M3 — API de apps y eventos**: instalar, iniciar, detener, reiniciar, desinstalar y progreso en vivo por SSE.
-- [ ] **M4 — Usuarios y seguridad**: primer arranque, sesiones, roles, suspensión, límite de intentos y CSRF.
+- [x] **M4 — Usuarios y seguridad**: primer arranque, sesiones, roles, suspensión, límite de intentos y CSRF.
 - [ ] **M5 — Métricas**: CPU, RAM, disco y temperatura por SSE solo mientras alguien mira.
 - [ ] **M6 — Interfaz Material 3**: Inicio, Tienda y Ajustes con temas Verde, Azul y Violeta (claro/oscuro).
 - [ ] **M7 — Fotos y videos**: subida retomable, duplicados, miniaturas en cola, EXIF, visor, álbumes, papelera y streaming.

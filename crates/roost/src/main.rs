@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use roost::apps::AppService;
+use roost::auth::AuthService;
+use roost::db::Database;
 use roost::docker::{BollardDocker, DockerRuntime, MockDocker};
 use roost::web::AppState;
 use roost::{bind_addr, web};
@@ -23,6 +25,29 @@ async fn main() {
     let data_dir = std::env::var("ROOST_DATA_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("/var/lib/roost"));
+    let secure_cookies = std::env::var("ROOST_HTTPS").as_deref() == Ok("1");
+
+    let db = if std::env::var("ROOST_DEMO").as_deref() == Ok("1") {
+        match Database::connect_in_memory().await {
+            Ok(db) => db,
+            Err(err) => {
+                tracing::error!("No pudimos iniciar la base de datos temporal: {err}");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        let db_path = data_dir.join("roost.db");
+        match Database::connect_file(&db_path).await {
+            Ok(db) => db,
+            Err(err) => {
+                tracing::error!(
+                    "No pudimos abrir la base de datos en '{}': {err}",
+                    db_path.display()
+                );
+                std::process::exit(1);
+            }
+        }
+    };
 
     let docker: Arc<dyn DockerRuntime> = if std::env::var("ROOST_DEMO").as_deref() == Ok("1") {
         tracing::info!("Iniciando Roost en modo simulado (ROOST_DEMO=1)");
@@ -60,6 +85,8 @@ async fn main() {
 
     let state = AppState {
         apps: Arc::new(apps_service),
+        auth: Arc::new(AuthService::new(&db)),
+        secure_cookies,
     };
 
     let addr = bind_addr();
