@@ -1,0 +1,24 @@
+# Rust build artifacts
+/target
+**/*.rs.bk
+
+# Local data and secrets
+*.db
+*.db-wal
+*.db-shm
+secret.key
+.env
+.env.*
+
+# Frontend (M6+)
+/web/node_modules
+/web/dist
+/web/.svelte-kit
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.vscode/
+.idea/

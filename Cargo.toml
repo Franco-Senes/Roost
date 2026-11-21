@@ -1,0 +1,16 @@
+[workspace]
+members = ["crates/roost"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/Franco-Senes/Roost"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = true
+panic = "abort"
+opt-level = 3
