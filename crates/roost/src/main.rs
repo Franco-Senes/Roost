@@ -93,6 +93,7 @@ async fn main() {
     let state = AppState {
         apps: Arc::new(apps_service),
         auth: Arc::new(AuthService::new(&db)),
+        db,
         metrics,
         secure_cookies,
     };

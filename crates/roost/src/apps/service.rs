@@ -106,6 +106,7 @@ pub type RamProvider = Arc<dyn Fn() -> u64 + Send + Sync>;
 pub struct AppService {
     catalog: Vec<AppManifest>,
     images: HashMap<String, String>,
+    icons: HashMap<String, String>,
     docker: Arc<dyn DockerRuntime>,
     events: broadcast::Sender<RoostEvent>,
     available_ram_mb: RamProvider,
@@ -122,6 +123,7 @@ impl AppService {
     ) -> Result<Self, super::CatalogError> {
         let catalog = load_catalog(apps_dir)?;
         let mut images = HashMap::with_capacity(catalog.len());
+        let mut icons = HashMap::with_capacity(catalog.len());
         for app in &catalog {
             let compose_path = apps_dir.join(&app.id).join("compose.yaml");
             if let Ok(raw) = fs::read_to_string(&compose_path)
@@ -129,10 +131,15 @@ impl AppService {
             {
                 images.insert(app.id.clone(), image);
             }
+            let icon_path = apps_dir.join(&app.id).join(&app.icon);
+            if let Ok(svg) = fs::read_to_string(&icon_path) {
+                icons.insert(app.id.clone(), svg);
+            }
         }
-        Ok(Self::new(
+        Ok(Self::new_with_icons(
             catalog,
             images,
+            icons,
             data_dir,
             docker,
             available_ram_mb,
@@ -147,15 +154,39 @@ impl AppService {
         docker: Arc<dyn DockerRuntime>,
         available_ram_mb: RamProvider,
     ) -> Self {
+        Self::new_with_icons(
+            catalog,
+            images,
+            HashMap::new(),
+            data_dir,
+            docker,
+            available_ram_mb,
+        )
+    }
+
+    fn new_with_icons(
+        catalog: Vec<AppManifest>,
+        images: HashMap<String, String>,
+        icons: HashMap<String, String>,
+        data_dir: PathBuf,
+        docker: Arc<dyn DockerRuntime>,
+        available_ram_mb: RamProvider,
+    ) -> Self {
         let (events, _) = broadcast::channel(128);
         Self {
             catalog,
             images,
+            icons,
             docker,
             events,
             available_ram_mb,
             data_dir,
         }
+    }
+
+    /// Devuelve el SVG del ícono de una app del catálogo.
+    pub fn icon_svg(&self, app_id: &str) -> Option<&str> {
+        self.icons.get(app_id).map(String::as_str)
     }
 
     /// Devuelve el catálogo completo disponible en la Tienda.

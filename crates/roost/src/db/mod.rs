@@ -53,4 +53,32 @@ impl Database {
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
     }
+
+    /// Lee todos los ajustes clave/valor guardados en SQLite.
+    pub async fn get_settings(
+        &self,
+    ) -> Result<std::collections::HashMap<String, String>, sqlx::Error> {
+        use sqlx::Row;
+        let rows = sqlx::query("SELECT key, value FROM settings")
+            .fetch_all(&self.pool)
+            .await?;
+        let mut map = std::collections::HashMap::with_capacity(rows.len());
+        for row in rows {
+            map.insert(row.get("key"), row.get("value"));
+        }
+        Ok(map)
+    }
+
+    /// Guarda o actualiza un ajuste clave/valor en SQLite.
+    pub async fn set_setting(&self, key: &str, value: &str) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO settings (key, value) VALUES (?, ?)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        )
+        .bind(key)
+        .bind(value)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
 }

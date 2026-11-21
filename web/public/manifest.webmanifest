@@ -1,0 +1,10 @@
+{
+  "name": "Roost",
+  "short_name": "Roost",
+  "description": "El servidor de tu casa, simple y privado.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F7FBF1",
+  "theme_color": "#3B6939",
+  "lang": "es"
+}
