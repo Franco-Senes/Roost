@@ -38,6 +38,16 @@ Devuelve `{ "id", "name", "role", "csrf_token" }` de la persona conectada.
 - `(admin)` `POST /api/apps/{id}/start`, `/stop`, `/restart`: controlan una app instalada (`X-CSRF-Token`).
 - `(admin)` `DELETE /api/apps/{id}`: desinstala una app instalada (`X-CSRF-Token` y `{ "confirm": true }`).
 
+## Fotos, videos y álbumes (M7)
+
+Todas las rutas exigen sesión y respetan privacidad estricta: cada persona solo ve sus propias fotos y álbumes compartidos con ella (el administrador no puede ver fotos privadas ajenas).
+
+- `POST /api/photos`: subida por partes retomable (`X-CSRF-Token`, `X-Upload-Id`, `X-Chunk-Offset`, `X-Total-Size`, `X-Filename`, `X-Taken-At`). Deduplica por `blake3` y encola miniaturas WebP de 256 px y 1024 px.
+- `GET /api/photos?cursor=&from=&to=&album=&trash=`: paginado por cursor ordenado por `taken_at DESC`.
+- `GET /api/photos/{id}/thumb/{size}` (`256` o `1024`), `GET /api/photos/{id}/original`, `GET /api/photos/{id}/stream` (rangos HTTP `206 Partial Content`).
+- `DELETE /api/photos/{id}` (mueve a papelera 30 días), `POST /api/photos/{id}/restore`.
+- Álbumes: `GET/POST /api/albums`, `PATCH/DELETE /api/albums/{id}`, `POST /api/albums/{id}/share`, `POST /api/albums/{id}/photos`.
+
 ## Ajustes (M6)
 
 - `GET /api/settings`: devuelve las preferencias guardadas (`theme`, `mode`, `server_name`) (requiere sesión).
