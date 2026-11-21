@@ -1,3 +1,4 @@
+pub mod docker;
 pub mod web;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
