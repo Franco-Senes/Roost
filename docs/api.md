@@ -38,6 +38,11 @@ Devuelve `{ "id", "name", "role", "csrf_token" }` de la persona conectada.
 - `(admin)` `POST /api/apps/{id}/start`, `/stop`, `/restart`: controlan una app instalada (`X-CSRF-Token`).
 - `(admin)` `DELETE /api/apps/{id}`: desinstala una app instalada (`X-CSRF-Token` y `{ "confirm": true }`).
 
+## Ajustes (M6)
+
+- `GET /api/settings`: devuelve las preferencias guardadas (`theme`, `mode`, `server_name`) (requiere sesión).
+- `PATCH /api/settings`: actualiza `theme` (`green` | `blue` | `purple`), `mode` (`light` | `dark`) o `server_name` (`X-CSRF-Token`).
+
 ## Sistema y métricas (M5)
 
 ### `GET /api/system`
