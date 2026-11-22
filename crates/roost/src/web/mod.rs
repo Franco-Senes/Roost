@@ -1,3 +1,4 @@
+mod ai_routes;
 mod photos_routes;
 
 use std::convert::Infallible;
@@ -15,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::error::RecvError;
 use tower_http::compression::CompressionLayer;
 
+use crate::ai::AiService;
 use crate::apps::{AppError, AppService};
 use crate::auth::{AuthError, AuthService, Role, SESSION_TTL_SECS, SessionInfo, constant_time_eq};
 use crate::db::Database;
@@ -33,6 +35,7 @@ struct WebAssets;
 pub struct AppState {
     pub apps: Arc<AppService>,
     pub auth: Arc<AuthService>,
+    pub ai: AiService,
     pub db: Database,
     pub metrics: MetricsService,
     pub photos: PhotoService,
@@ -99,6 +102,32 @@ pub fn router(state: AppState) -> Router {
             "/api/albums/{id}/photos",
             post(photos_routes::add_album_photo),
         )
+        // Agente de IA y proyectos locales 24/7 (M9)
+        .route(
+            "/api/ai/providers",
+            get(ai_routes::get_providers).put(ai_routes::put_provider),
+        )
+        .route("/api/ai/models", get(ai_routes::list_models))
+        .route("/api/ai/chat", post(ai_routes::post_chat))
+        .route(
+            "/api/ai/actions/{id}/approve",
+            post(ai_routes::approve_action),
+        )
+        .route(
+            "/api/ai/actions/{id}/reject",
+            post(ai_routes::reject_action),
+        )
+        .route(
+            "/api/ai/projects",
+            get(ai_routes::list_projects).post(ai_routes::create_project),
+        )
+        .route(
+            "/api/ai/projects/{id}/start",
+            post(ai_routes::start_project),
+        )
+        .route("/api/ai/projects/{id}/stop", post(ai_routes::stop_project))
+        .route("/api/ai/projects/{id}", delete(ai_routes::delete_project))
+        .route("/api/ai/projects/{id}/logs", get(ai_routes::project_logs))
         // Interfaz Material 3 embebida (SPA fallback)
         .fallback(serve_web_asset)
         .layer(CompressionLayer::new())
@@ -844,12 +873,22 @@ mod tests {
         let auth = Arc::new(AuthService::new(&db));
         let jobs = crate::jobs::JobQueue::new(&db);
         let photos = PhotoService::new(&db, std::env::temp_dir().join("roost-web-test"), jobs);
+        let apps = Arc::new(service);
+        let metrics = MetricsService::new(true);
+        let ai = AiService::new(
+            &db,
+            crate::ai::crypto::SecretCipher::ephemeral(),
+            Arc::clone(&apps),
+            metrics.clone(),
+            photos.clone(),
+        );
 
         AppState {
-            apps: Arc::new(service),
+            apps,
             auth,
+            ai,
             db,
-            metrics: MetricsService::new(true),
+            metrics,
             photos,
             demo_mode: false,
             secure_cookies: false,

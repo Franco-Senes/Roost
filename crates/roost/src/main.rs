@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use roost::ai::AiService;
+use roost::ai::crypto::SecretCipher;
 use roost::apps::AppService;
 use roost::auth::AuthService;
 use roost::db::Database;
@@ -104,7 +106,7 @@ async fn main() {
         data_dir
     };
     let jobs = JobQueue::new(&db);
-    let photos = PhotoService::new(&db, photo_data_dir, jobs.clone());
+    let photos = PhotoService::new(&db, photo_data_dir.clone(), jobs.clone());
     let worker_photos = photos.clone();
     jobs.spawn_worker(metrics.clone(), move |job| {
         let svc = worker_photos.clone();
@@ -127,9 +129,24 @@ async fn main() {
         }
     });
 
+    let cipher = if demo_mode {
+        SecretCipher::ephemeral()
+    } else {
+        SecretCipher::load_or_create(&photo_data_dir.join("secret.key"))
+            .unwrap_or_else(|_| SecretCipher::ephemeral())
+    };
+    let ai = AiService::new(
+        &db,
+        cipher,
+        Arc::clone(&apps_arc),
+        metrics.clone(),
+        photos.clone(),
+    );
+
     let state = AppState {
         apps: apps_arc,
         auth: Arc::new(AuthService::new(&db)),
+        ai,
         db,
         metrics,
         photos,

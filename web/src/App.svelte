@@ -44,6 +44,8 @@
       ActiveScreen = (await import('./screens/StoreScreen.svelte')).default;
     } else if (name === 'photos') {
       ActiveScreen = (await import('./screens/PhotosScreen.svelte')).default;
+    } else if (name === 'agent') {
+      ActiveScreen = (await import('./screens/AgentScreen.svelte')).default;
     } else if (name === 'settings') {
       ActiveScreen = (await import('./screens/SettingsScreen.svelte')).default;
     } else {
@@ -192,11 +194,8 @@
         />
       {:else if tab === 'photos' && ActiveScreen}
         <ActiveScreen />
-      {:else if tab === 'agent'}
-        <section class="card">
-          <h1>Agente de IA</h1>
-          <p class="muted">Tu asistente local y marketplace de modelos se habilitan en M9 y M10.</p>
-        </section>
+      {:else if tab === 'agent' && ActiveScreen}
+        <ActiveScreen {me} />
       {/if}
     </main>
 
@@ -283,7 +282,6 @@
   }
 
   .fab-mobile { display: none; }
-  .muted { color: var(--md-on-surface-variant); }
 
   @media (max-width: 600px) {
     .shell { flex-direction: column; padding-bottom: 80px; }

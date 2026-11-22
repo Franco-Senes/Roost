@@ -38,6 +38,14 @@ Devuelve `{ "id", "name", "role", "csrf_token" }` de la persona conectada.
 - `(admin)` `POST /api/apps/{id}/start`, `/stop`, `/restart`: controlan una app instalada (`X-CSRF-Token`).
 - `(admin)` `DELETE /api/apps/{id}`: desinstala una app instalada (`X-CSRF-Token` y `{ "confirm": true }`).
 
+## Agente de IA y proyectos locales 24/7 (M9)
+
+- `GET/PUT /api/ai/providers`: guarda claves cifradas con `chacha20poly1305` (solo devuelve `key_last4`).
+- `GET /api/ai/models`: lista modelos de Ollama (local por defecto), OpenRouter y Hack Club AI.
+- `POST /api/ai/chat`: stream SSE con `cloud_notice`, `reasoning`, `content` y tarjetas `action`.
+- `POST /api/ai/actions/{id}/approve` y `/reject`: aprueba o rechaza acciones propuestas (exige `admin` para acciones de administración).
+- `(admin)` `GET/POST /api/ai/projects`, `POST /api/ai/projects/{id}/start`, `/stop`, `DELETE /api/ai/projects/{id}`, `GET /api/ai/projects/{id}/logs`: gestiona proyectos locales de Antigravity (`agy`), Claude (`claude`) o comandos propios 24/7.
+
 ## Fotos, videos y álbumes (M7)
 
 Todas las rutas exigen sesión y respetan privacidad estricta: cada persona solo ve sus propias fotos y álbumes compartidos con ella (el administrador no puede ver fotos privadas ajenas).
