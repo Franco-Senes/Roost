@@ -153,4 +153,14 @@ export const api = {
   stopAiProject: (id) => request(`/api/ai/projects/${id}/stop`, { method: 'POST' }),
   deleteAiProject: (id) => request(`/api/ai/projects/${id}`, { method: 'DELETE' }),
   aiProjectLogs: (id) => request(`/api/ai/projects/${id}/logs`),
+  marketModels: (scope = '') =>
+    request(`/api/market/models${scope ? `?scope=${encodeURIComponent(scope)}` : ''}`),
+  marketSkills: () => request('/api/market/skills'),
+  installSkill: (id, approved_permissions) =>
+    request(`/api/market/skills/${encodeURIComponent(id)}/install`, {
+      method: 'POST',
+      body: JSON.stringify({ approved_permissions }),
+    }),
+  uninstallSkill: (id) =>
+    request(`/api/market/skills/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 };

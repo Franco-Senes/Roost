@@ -38,6 +38,12 @@ Devuelve `{ "id", "name", "role", "csrf_token" }` de la persona conectada.
 - `(admin)` `POST /api/apps/{id}/start`, `/stop`, `/restart`: controlan una app instalada (`X-CSRF-Token`).
 - `(admin)` `DELETE /api/apps/{id}`: desinstala una app instalada (`X-CSRF-Token` y `{ "confirm": true }`).
 
+## Marketplace (M10)
+
+- `GET /api/market/models?scope=local|cloud&free=true|false`: modelos reales de proveedores con indicador `fits_ram` para Ollama.
+- `GET /api/market/skills`: habilidades declarativas (`skills/<id>/skill.toml`) con explicación de permisos en español.
+- `(admin)` `POST /api/market/skills/{id}/install` (`{ "approved_permissions": [...] }`, `X-CSRF-Token`) y `DELETE /api/market/skills/{id}`.
+
 ## Agente de IA y proyectos locales 24/7 (M9)
 
 - `GET/PUT /api/ai/providers`: guarda claves cifradas con `chacha20poly1305` (solo devuelve `key_last4`).

@@ -6,6 +6,7 @@
 
   let query = $state('');
   let selectedCategory = $state('Todas');
+  let visibleCount = $state(36);
   let notice = $state('');
   let error = $state('');
   let syncing = $state(false);
@@ -132,7 +133,7 @@
   {/if}
 
   <div class="grid">
-    {#each filtered as app (app.id)}
+    {#each filtered.slice(0, visibleCount) as app (app.id)}
       {@const inst = installedMap[app.id]}
       {@const prog = installs[app.id]}
       <article class="card app-tile">
@@ -143,6 +144,7 @@
             width="48"
             height="48"
             loading="lazy"
+            onerror={(e) => (e.currentTarget.style.display = 'none')}
           />
           <div>
             <h3>{app.name}</h3>
@@ -165,6 +167,14 @@
       </article>
     {/each}
   </div>
+
+  {#if filtered.length > visibleCount}
+    <div style="text-align:center">
+      <button class="btn btn-tonal" onclick={() => (visibleCount += 48)}>
+        Mostrar más apps ({filtered.length - visibleCount} restantes)
+      </button>
+    </div>
+  {/if}
 </section>
 
 <style>

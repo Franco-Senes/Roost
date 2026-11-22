@@ -302,3 +302,97 @@ pub async fn project_logs(
     }
     Json(serde_json::json!({ "lines": state.ai.projects.project_logs(id) })).into_response()
 }
+
+// --- Marketplace de modelos y habilidades (M10) ---
+
+#[derive(Deserialize)]
+pub struct MarketModelsQuery {
+    scope: Option<String>, // "local" | "cloud"
+    free: Option<bool>,
+}
+
+pub async fn market_models(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Query(q): axum::extract::Query<MarketModelsQuery>,
+) -> Response {
+    let session = match require_session(&state, &headers).await {
+        Ok(s) => s,
+        Err(err) => return auth_error_response(err),
+    };
+    let mut models = state.ai.list_models(session.user.id).await;
+    if let Some(scope) = q.scope.as_deref() {
+        match scope {
+            "local" => models.retain(|m| !m.is_cloud),
+            "cloud" => models.retain(|m| m.is_cloud),
+            _ => {}
+        }
+    }
+    if let Some(free) = q.free {
+        models.retain(|m| m.is_free == free);
+    }
+    Json(models).into_response()
+}
+
+pub async fn market_skills(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(err) = require_session(&state, &headers).await {
+        return auth_error_response(err);
+    }
+    match state.market.list_skills().await {
+        Ok(list) => Json(list).into_response(),
+        Err(err) => bad_req(err),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct InstallSkillRequest {
+    #[serde(default)]
+    approved_permissions: Vec<String>,
+}
+
+pub async fn install_skill(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(req): Json<InstallSkillRequest>,
+) -> Response {
+    let session = match require_session(&state, &headers).await {
+        Ok(s) => s,
+        Err(err) => return auth_error_response(err),
+    };
+    if let Err(err) = require_admin(&session) {
+        return auth_error_response(err);
+    }
+    if let Err(err) = require_csrf(&session, &headers) {
+        return auth_error_response(err);
+    }
+    match state
+        .market
+        .install_skill(&id, &req.approved_permissions)
+        .await
+    {
+        Ok(view) => (StatusCode::CREATED, Json(view)).into_response(),
+        Err(err) => bad_req(err),
+    }
+}
+
+pub async fn uninstall_skill(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let session = match require_session(&state, &headers).await {
+        Ok(s) => s,
+        Err(err) => return auth_error_response(err),
+    };
+    if let Err(err) = require_admin(&session) {
+        return auth_error_response(err);
+    }
+    if let Err(err) = require_csrf(&session, &headers) {
+        return auth_error_response(err);
+    }
+    match state.market.uninstall_skill(&id).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(err) => bad_req(err),
+    }
+}
