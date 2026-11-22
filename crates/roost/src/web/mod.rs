@@ -36,6 +36,7 @@ pub struct AppState {
     pub db: Database,
     pub metrics: MetricsService,
     pub photos: PhotoService,
+    pub demo_mode: bool,
     pub secure_cookies: bool,
 }
 
@@ -354,7 +355,12 @@ async fn post_setup(
 ) -> Response {
     let ua = user_agent(&headers);
     match state.auth.setup_admin(&req.name, &req.password, &ua).await {
-        Ok(session) => session_response(StatusCode::CREATED, session, state.secure_cookies),
+        Ok(session) => {
+            if state.demo_mode {
+                let _ = state.photos.seed_demo_gallery(session.user.id).await;
+            }
+            session_response(StatusCode::CREATED, session, state.secure_cookies)
+        }
         Err(err) => auth_error_response(err),
     }
 }
@@ -823,6 +829,7 @@ mod tests {
             db,
             metrics: MetricsService::new(true),
             photos,
+            demo_mode: false,
             secure_cookies: false,
         }
     }

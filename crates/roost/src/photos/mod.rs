@@ -896,6 +896,75 @@ impl PhotoService {
             })?;
         Ok(())
     }
+
+    /// Precarga 3 imágenes originales libres de derechos y un álbum de ejemplo para `ROOST_DEMO=1`.
+    pub async fn seed_demo_gallery(&self, owner_id: i64) -> Result<usize, PhotoError> {
+        let samples: [(&str, [u8; 3], [u8; 3], i64); 3] = [
+            (
+                "atardecer_demo.png",
+                [236, 126, 74],
+                [103, 80, 164],
+                1_750_000_000,
+            ),
+            (
+                "bosque_demo.png",
+                [59, 105, 57],
+                [188, 240, 180],
+                1_754_000_000,
+            ),
+            (
+                "mar_demo.png",
+                [65, 95, 145],
+                [214, 227, 255],
+                1_758_000_000,
+            ),
+        ];
+
+        let album = self.create_album(owner_id, "Recuerdos de prueba").await?;
+
+        let mut inserted = 0;
+        for (idx, (filename, top, bottom, taken_at)) in samples.iter().enumerate() {
+            let mut img = image::RgbImage::new(160, 120);
+            for (x, y, pixel) in img.enumerate_pixels_mut() {
+                let t = y as f32 / 119.0;
+                let r = (f32::from(top[0]) * (1.0 - t) + f32::from(bottom[0]) * t) as u8;
+                let g = (f32::from(top[1]) * (1.0 - t) + f32::from(bottom[1]) * t) as u8;
+                let b = (f32::from(top[2]) * (1.0 - t) + f32::from(bottom[2]) * t) as u8;
+                let accent = if ((x as i32 - 80).pow(2) + (y as i32 - 48).pow(2)) < 320 {
+                    25
+                } else {
+                    0
+                };
+                *pixel = image::Rgb([
+                    r.saturating_add(accent),
+                    g.saturating_add(accent),
+                    b.saturating_add(accent),
+                ]);
+            }
+            let mut cursor = std::io::Cursor::new(Vec::new());
+            img.write_to(&mut cursor, image::ImageFormat::Png)
+                .map_err(|_| PhotoError::Internal("No pudimos crear foto demo.".to_string()))?;
+            let bytes = cursor.into_inner();
+            let res = self
+                .upload_chunk(
+                    owner_id,
+                    Some(&format!("demo_seed_{owner_id}_{idx}")),
+                    0,
+                    Some(bytes.len() as u64),
+                    filename,
+                    Some("image/png"),
+                    Some(*taken_at),
+                    &bytes,
+                )
+                .await?;
+            if let Some(photo) = res.photo {
+                let _ = self.generate_thumbnails(photo.id).await;
+                let _ = self.add_photo_to_album(owner_id, album.id, photo.id).await;
+                inserted += 1;
+            }
+        }
+        Ok(inserted)
+    }
 }
 
 #[cfg(test)]
@@ -1036,6 +1105,27 @@ mod tests {
                 .len(),
             1
         );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn demo_seed_creates_sample_photos_and_album() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let auth = AuthService::new(&db);
+        let admin = auth
+            .setup_admin("Franco", "contrasena-admin-2026", "ua")
+            .await
+            .unwrap();
+        let temp_dir = std::env::temp_dir().join(format!("roost-demo-seed-{}", now_unix()));
+        let jobs = JobQueue::new(&db);
+        let photos = PhotoService::new(&db, temp_dir.clone(), jobs);
+
+        let count = photos.seed_demo_gallery(admin.user.id).await.unwrap();
+        assert_eq!(count, 3);
+        let albums = photos.list_albums(admin.user.id).await.unwrap();
+        assert_eq!(albums.len(), 1);
+        assert_eq!(albums[0].photo_count, 3);
 
         let _ = fs::remove_dir_all(&temp_dir);
     }
