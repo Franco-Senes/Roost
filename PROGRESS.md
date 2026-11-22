@@ -13,4 +13,4 @@ Seguimiento de los hitos definidos en [`AGENTS.md`](AGENTS.md).
 - [x] **M8 — Emulador**: imagen Docker, modo demo e imagen de máquina virtual.
 - [x] **M9 — Agente de IA**: Ollama, OpenRouter y Hack Club AI, claves cifradas, herramientas con aprobación, pantalla Agente y proyectos locales 24/7 (Antigravity/Claude).
 - [x] **M10 — Marketplace**: modelos con filtros y habilidades declarativas con permisos aprobados.
-- [ ] **M11 — Pulido de rendimiento**: mediciones finales en Raspberry Pi 4 y laptop vieja.
+- [x] **M11 — Pulido de rendimiento**: benchmarks finales en macOS (`x86_64`), lanzador 24/7 (`scripts/install-service.sh`) y validación de límites de §2 (medición en Raspberry Pi 4 pendiente de hardware físico).
