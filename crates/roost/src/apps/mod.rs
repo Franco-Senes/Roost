@@ -1,4 +1,5 @@
 pub mod manifest;
+pub mod remote_catalog;
 pub mod service;
 
 pub use manifest::{

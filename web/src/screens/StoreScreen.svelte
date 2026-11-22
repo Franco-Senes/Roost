@@ -2,12 +2,28 @@
   import { api } from '../lib/api.js';
   import Icon from '../components/Icon.svelte';
 
-  let { me, store = [], installedApps = [], installs = {} } = $props();
+  let { me, store = [], installedApps = [], installs = {}, onRefresh } = $props();
 
   let query = $state('');
   let selectedCategory = $state('Todas');
   let notice = $state('');
   let error = $state('');
+  let syncing = $state(false);
+
+  async function syncCatalog() {
+    syncing = true;
+    error = '';
+    notice = '';
+    try {
+      const res = await api.refreshStore();
+      notice = `Catálogo actualizado: ${res.total} apps disponibles.`;
+      await onRefresh?.();
+    } catch (err) {
+      error = err.message;
+    } finally {
+      syncing = false;
+    }
+  }
 
   const categories = ['Todas', 'Películas', 'Archivos', 'Red', 'Casa', 'Seguridad', 'Fotos'];
 
@@ -50,7 +66,14 @@
 </script>
 
 <section class="page" aria-labelledby="store-title">
-  <h1 id="store-title">Tienda de apps</h1>
+  <header class="store-head">
+    <h1 id="store-title">Tienda de apps ({store.length})</h1>
+    {#if me.role === 'admin'}
+      <button class="btn btn-outlined" disabled={syncing} onclick={syncCatalog}>
+        {syncing ? 'Actualizando...' : 'Actualizar catálogo'}
+      </button>
+    {/if}
+  </header>
 
   <div class="search-box">
     <Icon name="search" size={20} />
@@ -114,7 +137,13 @@
       {@const prog = installs[app.id]}
       <article class="card app-tile">
         <div class="tile-head">
-          <img src={`/api/store/${app.id}/icon`} alt="" width="48" height="48" loading="lazy" />
+          <img
+            src={app.icon_url || `/api/store/${app.id}/icon`}
+            alt=""
+            width="48"
+            height="48"
+            loading="lazy"
+          />
           <div>
             <h3>{app.name}</h3>
             <p class="tagline">{app.tagline}</p>
@@ -140,6 +169,7 @@
 
 <style>
   .page { display: flex; flex-direction: column; gap: 18px; }
+  .store-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
   h1 { margin: 0; font-size: 1.75rem; font-weight: 500; }
   h2 { margin: 6px 0; font-size: 1.375rem; font-weight: 500; }
   h3 { margin: 0; font-size: 1.0625rem; font-weight: 500; }
