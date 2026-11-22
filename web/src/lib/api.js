@@ -102,4 +102,55 @@ export const api = {
   albums: () => request('/api/albums'),
   createAlbum: (name) =>
     request('/api/albums', { method: 'POST', body: JSON.stringify({ name }) }),
+  aiProviders: () => request('/api/ai/providers'),
+  saveAiProvider: (provider, api_key, base_url) =>
+    request('/api/ai/providers', {
+      method: 'PUT',
+      body: JSON.stringify({ provider, api_key, base_url }),
+    }),
+  aiModels: () => request('/api/ai/models'),
+  aiChatStream: async (model, message, onEvent) => {
+    const headers = { 'Content-Type': 'application/json' };
+    if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+    const res = await fetch('/api/ai/chat', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers,
+      body: JSON.stringify({ model, message }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'No pudimos hablar con el agente.');
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop() || '';
+      for (const block of parts) {
+        for (const line of block.split('\n')) {
+          if (line.startsWith('data:')) {
+            try {
+              onEvent(JSON.parse(line.slice(5).trim()));
+            } catch {
+              // Ignora bloques incompletos.
+            }
+          }
+        }
+      }
+    }
+  },
+  approveAction: (id) => request(`/api/ai/actions/${id}/approve`, { method: 'POST' }),
+  rejectAction: (id) => request(`/api/ai/actions/${id}/reject`, { method: 'POST' }),
+  aiProjects: () => request('/api/ai/projects'),
+  createAiProject: (payload) =>
+    request('/api/ai/projects', { method: 'POST', body: JSON.stringify(payload) }),
+  startAiProject: (id) => request(`/api/ai/projects/${id}/start`, { method: 'POST' }),
+  stopAiProject: (id) => request(`/api/ai/projects/${id}/stop`, { method: 'POST' }),
+  deleteAiProject: (id) => request(`/api/ai/projects/${id}`, { method: 'DELETE' }),
+  aiProjectLogs: (id) => request(`/api/ai/projects/${id}/logs`),
 };

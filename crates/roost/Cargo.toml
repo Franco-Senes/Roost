@@ -11,6 +11,7 @@ argon2 = "0.5"
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
 blake3 = "1"
 bollard = { version = "0.21", default-features = false, features = ["pipe"] }
+chacha20poly1305 = "0.10"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 getrandom = "0.2"
 hex = "0.4"
