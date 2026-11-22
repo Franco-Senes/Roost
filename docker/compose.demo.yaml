@@ -1,0 +1,11 @@
+services:
+  roost-demo:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: roost-demo
+    ports:
+      - "8420:8420"
+    environment:
+      ROOST_DEMO: "1"
+      ROOST_ADDR: "0.0.0.0:8420"

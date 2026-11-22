@@ -1,0 +1,35 @@
+#cloud-config
+# Configuración cloud-init para arrancar una VM liviana (QEMU / VirtualBox) directo en Roost.
+
+hostname: roost-vm
+package_update: true
+packages:
+  - ca-certificates
+  - curl
+  - ffmpeg
+
+write_files:
+  - path: /etc/systemd/system/roost.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Roost Family Home Server (Demo VM)
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=simple
+      Environment=ROOST_ADDR=0.0.0.0:8420
+      Environment=ROOST_DEMO=1
+      Environment=ROOST_APPS_DIR=/opt/roost/apps
+      Environment=ROOST_DATA_DIR=/var/lib/roost
+      ExecStart=/usr/local/bin/roost
+      Restart=on-failure
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  - mkdir -p /var/lib/roost
+  - systemctl daemon-reload
+  - systemctl enable --now roost.service

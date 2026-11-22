@@ -124,6 +124,7 @@ async fn main() {
         db,
         metrics,
         photos,
+        demo_mode,
         secure_cookies,
     };
 
