@@ -118,8 +118,17 @@ async fn main() {
         }
     });
 
+    let apps_arc = Arc::new(apps_service);
+    let sync_apps = Arc::clone(&apps_arc);
+    tokio::spawn(async move {
+        match sync_apps.sync_remote_catalog().await {
+            Ok(added) => tracing::info!("Catálogo online sincronizado (+{added} apps reales)"),
+            Err(err) => tracing::warn!("No se pudo sincronizar el catálogo online: {err}"),
+        }
+    });
+
     let state = AppState {
-        apps: Arc::new(apps_service),
+        apps: apps_arc,
         auth: Arc::new(AuthService::new(&db)),
         db,
         metrics,

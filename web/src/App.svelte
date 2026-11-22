@@ -181,7 +181,7 @@
           onOpenStore={() => (tab = 'store')}
         />
       {:else if tab === 'store' && ActiveScreen}
-        <ActiveScreen {me} {store} {installedApps} {installs} />
+        <ActiveScreen {me} {store} {installedApps} {installs} onRefresh={refreshData} />
       {:else if tab === 'settings' && ActiveScreen}
         <ActiveScreen
           {me}

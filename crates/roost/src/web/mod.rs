@@ -58,6 +58,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/system", get(get_system))
         // Tienda, apps y eventos
         .route("/api/store", get(get_store))
+        .route("/api/store/refresh", post(refresh_store))
         .route("/api/store/{id}/icon", get(get_store_icon))
         .route("/api/apps", get(get_installed_apps))
         .route("/api/apps/{id}/install", post(install_app))
@@ -509,7 +510,28 @@ async fn get_store(State(state): State<AppState>, headers: HeaderMap) -> Respons
     if let Err(err) = require_session(&state, &headers).await {
         return auth_error_response(err);
     }
-    Json(state.apps.store().to_vec()).into_response()
+    Json(state.apps.store()).into_response()
+}
+
+async fn refresh_store(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let session = match require_session(&state, &headers).await {
+        Ok(s) => s,
+        Err(err) => return auth_error_response(err),
+    };
+    if let Err(err) = require_admin(&session) {
+        return auth_error_response(err);
+    }
+    if let Err(err) = require_csrf(&session, &headers) {
+        return auth_error_response(err);
+    }
+    match state.apps.sync_remote_catalog().await {
+        Ok(added) => Json(serde_json::json!({
+            "added": added,
+            "total": state.apps.store().len(),
+        }))
+        .into_response(),
+        Err(err) => app_error_response(err),
+    }
 }
 
 async fn get_store_icon(

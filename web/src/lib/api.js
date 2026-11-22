@@ -48,6 +48,7 @@ export const api = {
   me: () => request('/api/me'),
   system: () => request('/api/system'),
   store: () => request('/api/store'),
+  refreshStore: () => request('/api/store/refresh', { method: 'POST' }),
   apps: () => request('/api/apps'),
   installApp: (id) => request(`/api/apps/${encodeURIComponent(id)}/install`, { method: 'POST' }),
   startApp: (id) => request(`/api/apps/${encodeURIComponent(id)}/start`, { method: 'POST' }),

@@ -29,7 +29,7 @@ impl fmt::Display for AppCategory {
     }
 }
 
-/// Metadatos de una app definidos en `apps/<id>/app.toml`.
+/// Metadatos de una app definidos en `apps/<id>/app.toml` o sincronizados desde el catálogo remoto.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppManifest {
     pub id: String,
@@ -41,6 +41,8 @@ pub struct AppManifest {
     pub web_port: u16,
     pub ram_recommended_mb: u64,
     pub icon: String,
+    #[serde(default)]
+    pub icon_url: Option<String>,
     pub license: String,
     pub upstream: String,
 }
