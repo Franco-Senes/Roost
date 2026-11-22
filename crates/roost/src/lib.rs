@@ -4,6 +4,7 @@ pub mod auth;
 pub mod db;
 pub mod docker;
 pub mod jobs;
+pub mod market;
 pub mod metrics;
 pub mod photos;
 pub mod web;

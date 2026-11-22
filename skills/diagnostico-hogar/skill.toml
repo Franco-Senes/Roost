@@ -1,0 +1,9 @@
+id = "diagnostico-hogar"
+name = "Diagnóstico del hogar"
+description = "Revisa la memoria, el procesador y el espacio libre para explicarte si algo anda lento."
+version = "1.0.0"
+permissions = ["sistema:leer"]
+
+[[tools]]
+name = "resumen_salud"
+description = "Resume el estado del servidor en palabras simples"

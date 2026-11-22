@@ -1,0 +1,9 @@
+id = "jellyfin-ayudante"
+name = "Ayudante de Jellyfin"
+description = "Busca películas en tu Jellyfin y te dice cómo verlas en la tele."
+version = "1.0.0"
+permissions = ["app:jellyfin:api"]
+
+[[tools]]
+name = "buscar_pelicula"
+description = "Busca una película o serie por nombre en tu Jellyfin"
