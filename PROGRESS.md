@@ -12,5 +12,5 @@ Seguimiento de los hitos definidos en [`AGENTS.md`](AGENTS.md).
 - [x] **M7 — Fotos y videos**: subida retomable, duplicados, miniaturas en cola, EXIF, visor, álbumes, papelera y streaming.
 - [x] **M8 — Emulador**: imagen Docker, modo demo e imagen de máquina virtual.
 - [x] **M9 — Agente de IA**: Ollama, OpenRouter y Hack Club AI, claves cifradas, herramientas con aprobación, pantalla Agente y proyectos locales 24/7 (Antigravity/Claude).
-- [ ] **M10 — Marketplace**: modelos con filtros y habilidades declarativas con permisos aprobados.
+- [x] **M10 — Marketplace**: modelos con filtros y habilidades declarativas con permisos aprobados.
 - [ ] **M11 — Pulido de rendimiento**: mediciones finales en Raspberry Pi 4 y laptop vieja.

@@ -4,8 +4,10 @@
 
   let { me } = $props();
 
-  let view = $state('chat'); // 'chat' | 'projects' | 'keys'
+  let view = $state('chat'); // 'chat' | 'projects' | 'market' | 'keys'
   let models = $state([]);
+  let skills = $state([]);
+  let marketScope = $state('');
   let selectedModel = $state('roost/local-assistant');
   let providers = $state([]);
   let messages = $state([]);
@@ -32,9 +34,14 @@
 
   async function loadAll() {
     try {
-      const [m, p] = await Promise.all([api.aiModels(), api.aiProviders()]);
+      const [m, p, sk] = await Promise.all([
+        api.marketModels(marketScope),
+        api.aiProviders(),
+        api.marketSkills(),
+      ]);
       models = m;
       providers = p;
+      skills = sk;
       if (m.length && !m.some((x) => x.id === selectedModel)) {
         selectedModel = m[0].id;
       }
@@ -153,6 +160,26 @@
     await api.deleteAiProject(id);
     projects = await api.aiProjects();
   }
+
+  async function installSkill(skill) {
+    error = '';
+    try {
+      await api.installSkill(skill.id, skill.permissions);
+      skills = await api.marketSkills();
+    } catch (err) {
+      error = err.message;
+    }
+  }
+
+  async function uninstallSkill(id) {
+    error = '';
+    try {
+      await api.uninstallSkill(id);
+      skills = await api.marketSkills();
+    } catch (err) {
+      error = err.message;
+    }
+  }
 </script>
 
 <section class="page" aria-labelledby="agent-title">
@@ -170,6 +197,9 @@
           Proyectos 24/7
         </button>
       {/if}
+      <button type="button" class="btn" class:btn-tonal={view === 'market'} class:btn-outlined={view !== 'market'} onclick={() => (view = 'market')}>
+        Marketplace
+      </button>
       <button type="button" class="btn" class:btn-tonal={view === 'keys'} class:btn-outlined={view !== 'keys'} onclick={() => (view = 'keys')}>
         Proveedores y claves
       </button>
@@ -306,6 +336,46 @@
         <pre class="log-box">{activeLogs.lines.join('\n') || '(sin salida todavía)'}</pre>
       </article>
     {/if}
+  {:else if view === 'market'}
+    <article class="card">
+      <h2>Marketplace de modelos</h2>
+      <div class="tabs" style="margin-bottom:12px">
+        <button class="btn" class:btn-tonal={marketScope === ''} class:btn-outlined={marketScope !== ''} onclick={() => { marketScope = ''; loadAll(); }}>Todos</button>
+        <button class="btn" class:btn-tonal={marketScope === 'local'} class:btn-outlined={marketScope !== 'local'} onclick={() => { marketScope = 'local'; loadAll(); }}>Local</button>
+        <button class="btn" class:btn-tonal={marketScope === 'cloud'} class:btn-outlined={marketScope !== 'cloud'} onclick={() => { marketScope = 'cloud'; loadAll(); }}>Nube</button>
+      </div>
+      <ul class="prov-list">
+        {#each models as m (m.id)}
+          <li>
+            <strong>{m.name}</strong> · {m.is_cloud ? 'Nube' : 'Local'} · {m.is_free ? 'Gratis' : 'Pago'}
+            {#if m.fits_ram === true} · <span>Entra en tu RAM</span>{/if}
+            {#if m.fits_ram === false} · <span>Requiere más RAM libre</span>{/if}
+          </li>
+        {/each}
+      </ul>
+    </article>
+
+    <article class="card">
+      <h2>Habilidades del agente</h2>
+      <div class="proj-list">
+        {#each skills as sk (sk.id)}
+          <div class="action-card">
+            <div>
+              <strong>{sk.name}</strong> <span class="muted">v{sk.version}</span>
+              <p class="muted">{sk.description}</p>
+              <div class="muted">Permisos: {sk.permissions_es.join(' · ')}</div>
+            </div>
+            {#if me.role === 'admin'}
+              {#if sk.installed}
+                <button class="btn btn-danger" onclick={() => uninstallSkill(sk.id)}>Desinstalar</button>
+              {:else}
+                <button class="btn btn-primary" onclick={() => installSkill(sk)}>Aprobar e instalar</button>
+              {/if}
+            {/if}
+          </div>
+        {/each}
+      </div>
+    </article>
   {:else}
     <article class="card">
       <h2>Proveedores y claves cifradas</h2>

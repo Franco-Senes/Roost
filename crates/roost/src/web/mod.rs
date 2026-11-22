@@ -20,6 +20,7 @@ use crate::ai::AiService;
 use crate::apps::{AppError, AppService};
 use crate::auth::{AuthError, AuthService, Role, SESSION_TTL_SECS, SessionInfo, constant_time_eq};
 use crate::db::Database;
+use crate::market::MarketService;
 use crate::metrics::MetricsService;
 use crate::photos::PhotoService;
 
@@ -36,6 +37,7 @@ pub struct AppState {
     pub apps: Arc<AppService>,
     pub auth: Arc<AuthService>,
     pub ai: AiService,
+    pub market: MarketService,
     pub db: Database,
     pub metrics: MetricsService,
     pub photos: PhotoService,
@@ -128,6 +130,17 @@ pub fn router(state: AppState) -> Router {
         .route("/api/ai/projects/{id}/stop", post(ai_routes::stop_project))
         .route("/api/ai/projects/{id}", delete(ai_routes::delete_project))
         .route("/api/ai/projects/{id}/logs", get(ai_routes::project_logs))
+        // Marketplace de modelos y habilidades (M10)
+        .route("/api/market/models", get(ai_routes::market_models))
+        .route("/api/market/skills", get(ai_routes::market_skills))
+        .route(
+            "/api/market/skills/{id}/install",
+            post(ai_routes::install_skill),
+        )
+        .route(
+            "/api/market/skills/{id}",
+            delete(ai_routes::uninstall_skill),
+        )
         // Interfaz Material 3 embebida (SPA fallback)
         .fallback(serve_web_asset)
         .layer(CompressionLayer::new())
@@ -883,10 +896,16 @@ mod tests {
             photos.clone(),
         );
 
+        let market = MarketService::from_dir(
+            &db,
+            &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../skills"),
+        );
+
         AppState {
             apps,
             auth,
             ai,
+            market,
             db,
             metrics,
             photos,

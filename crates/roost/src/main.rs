@@ -10,6 +10,7 @@ use roost::auth::AuthService;
 use roost::db::Database;
 use roost::docker::{BollardDocker, DockerRuntime, MockDocker};
 use roost::jobs::JobQueue;
+use roost::market::MarketService;
 use roost::metrics::MetricsService;
 use roost::photos::PhotoService;
 use roost::web::AppState;
@@ -143,10 +144,16 @@ async fn main() {
         photos.clone(),
     );
 
+    let skills_dir = std::env::var("ROOST_SKILLS_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("skills"));
+    let market = MarketService::from_dir(&db, &skills_dir);
+
     let state = AppState {
         apps: apps_arc,
         auth: Arc::new(AuthService::new(&db)),
         ai,
+        market,
         db,
         metrics,
         photos,
